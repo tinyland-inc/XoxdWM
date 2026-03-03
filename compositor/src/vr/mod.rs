@@ -47,3 +47,4 @@ pub mod p300;
 pub mod motor_imagery;
 pub mod fatigue_eeg;
 pub mod bci_state;
+pub mod follow_mode;

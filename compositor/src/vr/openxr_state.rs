@@ -28,6 +28,7 @@ use super::hand_tracking::HandTrackingState;
 use super::link_hints::LinkHintState;
 use super::scene::VrScene;
 use super::bci_state::BciState;
+use super::follow_mode::FollowMode;
 use super::virtual_keyboard::VirtualKeyboardState;
 use super::vr_interaction::VrInteraction;
 
@@ -140,6 +141,7 @@ pub struct VrState {
     pub gesture: GestureState,
     pub virtual_keyboard: VirtualKeyboardState,
     pub bci: BciState,
+    pub follow_mode: FollowMode,
 
     // OpenXR objects (Option because they're created incrementally)
     entry: Option<xr::Entry>,
@@ -186,6 +188,7 @@ impl VrState {
             gesture: GestureState::new(),
             virtual_keyboard: VirtualKeyboardState::new(),
             bci: BciState::new(),
+            follow_mode: FollowMode::new(),
             entry: None,
             instance: None,
             system_id: None,

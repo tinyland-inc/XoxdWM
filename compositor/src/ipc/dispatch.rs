@@ -193,6 +193,11 @@ pub fn handle_message(state: &mut EwwmState, client_id: u64, raw: &str) -> Optio
         // IPC security (v0.3.1)
         Some("ipc-client-info") => handle_ipc_client_info(state, client_id, msg_id),
         Some("ipc-rate-limit") => handle_ipc_rate_limit(state, client_id, msg_id, &value),
+        // VR follow mode
+        Some("vr-follow-status") => handle_vr_follow_status(state, msg_id),
+        Some("vr-follow-set-policy") => handle_vr_follow_set_policy(state, msg_id, &value),
+        Some("vr-follow-recenter") => handle_vr_follow_recenter(state, msg_id),
+        Some("vr-follow-grab-all") => handle_vr_follow_grab_all(state, msg_id),
         Some(other) => Some(error_response(
             msg_id,
             &format!("unknown message type: {other}"),
@@ -2631,6 +2636,52 @@ fn handle_ipc_rate_limit(
         client.rate_limiter.max_per_second = new_limit;
         debug!(client_id, new_limit, "rate limit updated");
     }
+    Some(ok_response(msg_id))
+}
+
+// ── VR follow mode handlers ──────────────────────────────
+
+fn handle_vr_follow_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let status = state.vr_state.follow_mode.status_sexp();
+    Some(format!(
+        "(:type :response :id {} :status :ok :follow {})",
+        msg_id, status
+    ))
+}
+
+fn handle_vr_follow_set_policy(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    use crate::vr::follow_mode::FollowPolicy;
+
+    let policy_str = get_keyword(value, "policy");
+    match policy_str.as_deref().and_then(FollowPolicy::from_str) {
+        Some(policy) => {
+            state.vr_state.follow_mode.set_policy(policy);
+            Some(ok_response(msg_id))
+        }
+        None => Some(error_response(
+            msg_id,
+            "invalid :policy (use disabled, focused-only, grab-all, or threshold-only)",
+        )),
+    }
+}
+
+fn handle_vr_follow_recenter(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let head_pos = state.vr_state.interaction.head_pose.position;
+    let head_rot = state.vr_state.interaction.head_pose.rotation;
+    let vr = &mut state.vr_state;
+    vr.follow_mode.recenter(head_pos, head_rot, &mut vr.scene);
+    Some(ok_response(msg_id))
+}
+
+fn handle_vr_follow_grab_all(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let head_pos = state.vr_state.interaction.head_pose.position;
+    let head_rot = state.vr_state.interaction.head_pose.rotation;
+    let vr = &mut state.vr_state;
+    vr.follow_mode.grab_all(&mut vr.scene, head_pos, head_rot);
     Some(ok_response(msg_id))
 }
 
