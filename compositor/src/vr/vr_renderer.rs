@@ -583,7 +583,7 @@ fn view_matrix_from_xr_pose(pose: &xr::Posef) -> Mat4 {
 
     let transform = Transform3D {
         position: Vec3::new(p.x, p.y, p.z),
-        rotation: Quat::new(q.x, q.y, q.z, q.w),
+        rotation: Quat { x: q.x, y: q.y, z: q.z, w: q.w },
         scale: Vec3::ONE,
     };
 

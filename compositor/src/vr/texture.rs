@@ -153,7 +153,7 @@ impl TextureManager {
                                 0,
                                 tex.format.gl_format(),
                                 glow::UNSIGNED_BYTE,
-                                None,
+                                glow::PixelUnpackData::Slice(None),
                             );
 
                             // Set filtering

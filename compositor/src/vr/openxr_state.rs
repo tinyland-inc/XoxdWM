@@ -712,8 +712,8 @@ impl VrState {
             }
         };
 
-        // Record frame timing
-        self.frame_timing.record_frame();
+        // Record frame timing (no per-phase breakdown yet; pass zeros)
+        self.frame_timing.record_frame(0.0, 0.0, 0.0);
 
         Some(VrFrameData {
             views,
