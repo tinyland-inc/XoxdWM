@@ -1,0 +1,238 @@
+name: VR Hardware Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      test-suite:
+        description: 'Test suite to run'
+        required: true
+        type: choice
+        options:
+          - smoke
+          - drm-lease
+          - full
+        default: smoke
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: vr-hardware
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Hardware Preflight
+    runs-on: [self-hosted, honey]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check GPU
+        run: |
+          echo "=== DRI devices ==="
+          ls -la /dev/dri/
+          test -e /dev/dri/card0 || { echo "ERROR: /dev/dri/card0 not found"; exit 1; }
+          test -e /dev/dri/renderD128 || { echo "ERROR: /dev/dri/renderD128 not found"; exit 1; }
+
+      - name: Check DRM connectors
+        run: |
+          echo "=== DRM info ==="
+          drm_info /dev/dri/card0 2>/dev/null || cat /sys/class/drm/card0-*/status 2>/dev/null || true
+
+      - name: Check HMD USB
+        run: |
+          echo "=== USB devices ==="
+          lsusb 2>/dev/null || true
+          echo "=== Bigscreen Beyond ==="
+          lsusb 2>/dev/null | grep -i "bigscreen\|beyond" || echo "HMD not detected via USB (may be DisplayPort-only)"
+
+      - name: Check Monado
+        run: |
+          echo "=== Monado probe ==="
+          monado-cli probe 2>&1 || echo "WARNING: monado-cli probe failed (headset may be off)"
+
+      - name: Check Vulkan
+        run: |
+          echo "=== Vulkan ICD ==="
+          vulkaninfo --summary 2>&1 | head -30 || echo "WARNING: vulkaninfo not available"
+
+  compositor-gpu:
+    name: Compositor GPU Build & Test
+    needs: preflight
+    runs-on: [self-hosted, honey]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v30
+      - uses: ryanccn/attic-action@v0
+        if: env.ATTIC_SERVER != ''
+        with:
+          endpoint: ${{ env.ATTIC_SERVER }}
+          cache: ${{ env.ATTIC_CACHE }}
+          token: ${{ secrets.ATTIC_TOKEN }}
+
+      - name: Build compositor (full + VR)
+        run: nix build .#packages.x86_64-linux.compositor
+
+      - name: Run cargo tests with GPU
+        run: |
+          nix develop --command bash -c "
+            cd compositor
+            cargo test --features full-backend,vr
+          "
+
+  vr-session:
+    name: VR Session Lifecycle
+    needs: compositor-gpu
+    runs-on: [self-hosted, honey]
+    timeout-minutes: 15
+    if: inputs.test-suite == 'full' || github.ref_type == 'tag'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v30
+      - uses: ryanccn/attic-action@v0
+        if: env.ATTIC_SERVER != ''
+        with:
+          endpoint: ${{ env.ATTIC_SERVER }}
+          cache: ${{ env.ATTIC_CACHE }}
+          token: ${{ secrets.ATTIC_TOKEN }}
+
+      - name: Start Monado service
+        run: |
+          systemctl --user start monado.service || true
+          sleep 2
+          systemctl --user status monado.service || true
+
+      - name: Compositor DRM backend smoke test
+        run: |
+          timeout 10 nix run .#compositor -- \
+            --backend drm --vr-enable 2>&1 || true
+
+      - name: IPC round-trip test
+        run: |
+          nix develop --command bash -c "
+            cd compositor
+            cargo test --features full-backend,vr -- --test-threads=1 ipc_
+          "
+
+      - name: Stop Monado service
+        if: always()
+        run: systemctl --user stop monado.service 2>/dev/null || true
+
+  drm-lease:
+    name: DRM Lease Detection
+    needs: preflight
+    runs-on: [self-hosted, honey]
+    timeout-minutes: 10
+    if: inputs.test-suite != 'smoke' || github.ref_type == 'tag'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v30
+      - uses: ryanccn/attic-action@v0
+        if: env.ATTIC_SERVER != ''
+        with:
+          endpoint: ${{ env.ATTIC_SERVER }}
+          cache: ${{ env.ATTIC_CACHE }}
+          token: ${{ secrets.ATTIC_TOKEN }}
+
+      - name: Enumerate DRM connectors
+        run: |
+          echo "=== Non-desktop connectors ==="
+          for card in /dev/dri/card*; do
+            for conn in /sys/class/drm/card*-*/; do
+              non_desktop=$(cat "$conn/non_desktop" 2>/dev/null || echo "0")
+              status=$(cat "$conn/status" 2>/dev/null || echo "unknown")
+              echo "  $(basename $conn): status=$status non_desktop=$non_desktop"
+            done
+          done
+
+      - name: Run DRM lease tests
+        run: |
+          nix develop --command bash -c "
+            cd compositor
+            cargo test --features full-backend,vr -- --test-threads=1 drm_lease
+          "
+
+  eye-tracking:
+    name: Eye Tracking E2E
+    needs: compositor-gpu
+    runs-on: [self-hosted, honey]
+    timeout-minutes: 15
+    if: inputs.test-suite == 'full' || github.ref_type == 'tag'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v30
+      - uses: ryanccn/attic-action@v0
+        if: env.ATTIC_SERVER != ''
+        with:
+          endpoint: ${{ env.ATTIC_SERVER }}
+          cache: ${{ env.ATTIC_CACHE }}
+          token: ${{ secrets.ATTIC_TOKEN }}
+
+      - name: Check eye tracking availability
+        id: eye-check
+        run: |
+          if monado-cli probe 2>&1 | grep -qi "eye"; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Eye tracking hardware not detected, skipping detailed tests"
+          fi
+
+      - name: Run eye tracking tests
+        if: steps.eye-check.outputs.available == 'true'
+        run: |
+          nix develop --command bash -c "
+            cd compositor
+            cargo test --features full-backend,vr -- --test-threads=1 eye_tracking
+          "
+
+      - name: Run gaze focus tests
+        if: steps.eye-check.outputs.available == 'true'
+        run: |
+          nix develop --command bash -c "
+            cd compositor
+            cargo test --features full-backend,vr -- --test-threads=1 gaze_focus
+          "
+
+  benchmark:
+    name: GPU Benchmark
+    needs: compositor-gpu
+    runs-on: [self-hosted, honey]
+    timeout-minutes: 20
+    if: inputs.test-suite == 'full' || github.ref_type == 'tag'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v30
+      - uses: ryanccn/attic-action@v0
+        if: env.ATTIC_SERVER != ''
+        with:
+          endpoint: ${{ env.ATTIC_SERVER }}
+          cache: ${{ env.ATTIC_CACHE }}
+          token: ${{ secrets.ATTIC_TOKEN }}
+
+      - name: Run GPU benchmark suite
+        run: |
+          nix develop --command just vr-benchmark-gpu
+
+      - name: Collect system info
+        run: |
+          mkdir -p benchmark-results
+          echo "=== GPU ===" > benchmark-results/system-info.txt
+          lspci | grep -i vga >> benchmark-results/system-info.txt 2>/dev/null || true
+          echo "=== Kernel ===" >> benchmark-results/system-info.txt
+          uname -r >> benchmark-results/system-info.txt
+          echo "=== Mesa ===" >> benchmark-results/system-info.txt
+          vulkaninfo --summary 2>&1 | grep -E "apiVersion|driverVersion|driverName" >> benchmark-results/system-info.txt || true
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: vr-benchmark-${{ github.sha }}
+          path: benchmark-results/
+          retention-days: 90

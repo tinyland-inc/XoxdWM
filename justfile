@@ -87,6 +87,65 @@ vr-test:
         cargo test --manifest-path "{{project_root}}/compositor/Cargo.toml" \
         -- --test-threads=1 vr_
 
+[group('vr')]
+vr-preflight:
+    @echo "VR hardware preflight checks..."
+    @echo "=== GPU ==="
+    @test -e /dev/dri/card0 && echo "  /dev/dri/card0: OK" || echo "  /dev/dri/card0: MISSING"
+    @test -e /dev/dri/renderD128 && echo "  /dev/dri/renderD128: OK" || echo "  /dev/dri/renderD128: MISSING"
+    @echo "=== HMD USB ==="
+    @lsusb 2>/dev/null | grep -i "bigscreen\|beyond\|valve\|htc\|oculus\|meta" || echo "  No known HMD detected via USB"
+    @echo "=== Monado ==="
+    @monado-cli probe 2>&1 && echo "  Monado: OK" || echo "  Monado: probe failed"
+    @echo "=== Vulkan ==="
+    @vulkaninfo --summary 2>&1 | head -10 || echo "  vulkaninfo not available"
+
+[group('vr')]
+vr-drm-info:
+    @echo "DRM connector info..."
+    @for card in /dev/dri/card*; do \
+        echo "=== $card ==="; \
+        drm_info "$card" 2>/dev/null || \
+        for conn in /sys/class/drm/$(basename "$card")-*/; do \
+            echo "  $(basename $conn): status=$(cat $conn/status 2>/dev/null) non_desktop=$(cat $conn/non_desktop 2>/dev/null)"; \
+        done; \
+    done
+
+[group('vr')]
+vr-hardware-test suite="smoke":
+    @echo "Running VR hardware test suite: {{suite}}..."
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{suite}}" in
+        smoke)
+            echo "--- Smoke test: build + basic GPU tests ---"
+            cargo test --manifest-path "{{project_root}}/compositor/Cargo.toml" \
+                --features full-backend,vr
+            ;;
+        drm-lease)
+            echo "--- DRM lease tests ---"
+            cargo test --manifest-path "{{project_root}}/compositor/Cargo.toml" \
+                --features full-backend,vr -- --test-threads=1 drm_lease
+            ;;
+        full)
+            echo "--- Full VR hardware test suite ---"
+            cargo test --manifest-path "{{project_root}}/compositor/Cargo.toml" \
+                --features full-backend,vr -- --test-threads=1
+            ;;
+        *)
+            echo "Unknown suite: {{suite}} (use smoke, drm-lease, or full)"
+            exit 1
+            ;;
+    esac
+
+[group('vr')]
+vr-benchmark-gpu:
+    @echo "Running GPU benchmark suite..."
+    cargo bench --manifest-path "{{project_root}}/compositor/Cargo.toml" \
+        --features full-backend,vr 2>&1 | tee benchmark-results/gpu-bench.txt || \
+    cargo test --manifest-path "{{project_root}}/compositor/Cargo.toml" \
+        --features full-backend,vr -- --test-threads=1 benchmark
+
 # ── dev ────────────────────────────────────────────────
 
 [group('dev')]
