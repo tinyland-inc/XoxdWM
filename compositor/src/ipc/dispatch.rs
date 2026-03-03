@@ -198,6 +198,15 @@ pub fn handle_message(state: &mut EwwmState, client_id: u64, raw: &str) -> Optio
         Some("vr-follow-set-policy") => handle_vr_follow_set_policy(state, msg_id, &value),
         Some("vr-follow-recenter") => handle_vr_follow_recenter(state, msg_id),
         Some("vr-follow-grab-all") => handle_vr_follow_grab_all(state, msg_id),
+        // VR transient chains
+        Some("vr-transient-add") => handle_vr_transient_add(state, msg_id, &value),
+        Some("vr-transient-remove") => handle_vr_transient_remove(state, msg_id, &value),
+        Some("vr-transient-list") => handle_vr_transient_list(state, msg_id),
+        // VR overlays
+        Some("vr-overlay-create") => handle_vr_overlay_create(state, msg_id, &value),
+        Some("vr-overlay-remove") => handle_vr_overlay_remove(state, msg_id, &value),
+        Some("vr-overlay-list") => handle_vr_overlay_list(state, msg_id),
+        Some("vr-overlay-configure") => handle_vr_overlay_configure(state, msg_id, &value),
         Some(other) => Some(error_response(
             msg_id,
             &format!("unknown message type: {other}"),
@@ -2682,6 +2691,165 @@ fn handle_vr_follow_grab_all(state: &mut EwwmState, msg_id: i64) -> Option<Strin
     let head_rot = state.vr_state.interaction.head_pose.rotation;
     let vr = &mut state.vr_state;
     vr.follow_mode.grab_all(&mut vr.scene, head_pos, head_rot);
+    Some(ok_response(msg_id))
+}
+
+// ── VR Transient Chains ──────────────────────────────────
+
+fn handle_vr_transient_add(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    use crate::vr::transient_3d::TransientPlacement;
+
+    let child_id = match get_int(value, "child") {
+        Some(id) => id as u64,
+        None => return Some(error_response(msg_id, "missing :child")),
+    };
+    let parent_id = match get_int(value, "parent") {
+        Some(id) => id as u64,
+        None => return Some(error_response(msg_id, "missing :parent")),
+    };
+    let placement_str = get_keyword(value, "placement").unwrap_or_else(|| "auto".to_string());
+    let placement = TransientPlacement::from_str(&placement_str).unwrap_or(TransientPlacement::Auto);
+
+    match state.vr_state.transient_chains.add_transient(child_id, parent_id, placement) {
+        Ok(()) => Some(ok_response(msg_id)),
+        Err(e) => Some(error_response(msg_id, &e)),
+    }
+}
+
+fn handle_vr_transient_remove(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    let child_id = match get_int(value, "child") {
+        Some(id) => id as u64,
+        None => return Some(error_response(msg_id, "missing :child")),
+    };
+    state.vr_state.transient_chains.remove_transient(child_id);
+    Some(ok_response(msg_id))
+}
+
+fn handle_vr_transient_list(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let sexp = state.vr_state.transient_chains.to_sexp();
+    Some(format!(
+        "(:type :response :id {} :status :ok :transients {})",
+        msg_id, sexp
+    ))
+}
+
+// ── VR Overlays ─────────────────────────────────────────────
+
+fn handle_vr_overlay_create(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    use crate::vr::overlay::OverlayType;
+
+    let type_str = get_keyword(value, "overlay-type").unwrap_or_else(|| "head-locked".to_string());
+    let overlay_type = match OverlayType::from_str(&type_str) {
+        Some(t) => t,
+        None => {
+            return Some(error_response(
+                msg_id,
+                "invalid :overlay-type (use world-locked, head-locked, or hand-locked)",
+            ))
+        }
+    };
+    let width = get_float(value, "width").unwrap_or(0.4) as f32;
+    let height = get_float(value, "height").unwrap_or(0.3) as f32;
+    let alpha = get_float(value, "alpha").unwrap_or(1.0) as f32;
+    let sort_order = get_int(value, "sort-order").unwrap_or(0) as i32;
+
+    let id = state
+        .vr_state
+        .overlay_manager
+        .create_overlay(overlay_type, width, height, alpha, sort_order);
+
+    if id == 0 {
+        Some(error_response(msg_id, "max overlays reached"))
+    } else {
+        Some(format!(
+            "(:type :response :id {} :status :ok :overlay-id {})",
+            msg_id, id
+        ))
+    }
+}
+
+fn handle_vr_overlay_remove(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    let overlay_id = match get_int(value, "overlay-id") {
+        Some(id) => id as u64,
+        None => return Some(error_response(msg_id, "missing :overlay-id")),
+    };
+    if state.vr_state.overlay_manager.remove_overlay(overlay_id) {
+        Some(ok_response(msg_id))
+    } else {
+        Some(error_response(msg_id, "overlay not found"))
+    }
+}
+
+fn handle_vr_overlay_list(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let sexp = state.vr_state.overlay_manager.to_sexp();
+    Some(format!(
+        "(:type :response :id {} :status :ok :overlays {})",
+        msg_id, sexp
+    ))
+}
+
+fn handle_vr_overlay_configure(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    let overlay_id = match get_int(value, "overlay-id") {
+        Some(id) => id as u64,
+        None => return Some(error_response(msg_id, "missing :overlay-id")),
+    };
+
+    let mgr = &mut state.vr_state.overlay_manager;
+
+    if mgr.get_overlay(overlay_id).is_none() {
+        return Some(error_response(msg_id, "overlay not found"));
+    }
+
+    // Apply any provided configuration fields.
+    if let Some(alpha) = get_float(value, "alpha") {
+        mgr.set_alpha(overlay_id, alpha as f32);
+    }
+    if let Some(visible) = get_bool(value, "visible") {
+        mgr.set_visible(overlay_id, visible);
+    }
+    if let Some(surface_id) = get_int(value, "surface") {
+        mgr.link_surface(overlay_id, surface_id as u64);
+    }
+
+    // Position update: check for :x :y :z fields.
+    let has_pos = get_float(value, "x").is_some()
+        || get_float(value, "y").is_some()
+        || get_float(value, "z").is_some();
+    if has_pos {
+        use crate::vr::scene::Transform3D;
+        let current = mgr.get_overlay(overlay_id).unwrap().transform;
+        let new_transform = Transform3D {
+            position: crate::vr::scene::Vec3::new(
+                get_float(value, "x").unwrap_or(current.position.x as f64) as f32,
+                get_float(value, "y").unwrap_or(current.position.y as f64) as f32,
+                get_float(value, "z").unwrap_or(current.position.z as f64) as f32,
+            ),
+            rotation: current.rotation,
+            scale: current.scale,
+        };
+        mgr.set_transform(overlay_id, new_transform);
+    }
+
     Some(ok_response(msg_id))
 }
 
