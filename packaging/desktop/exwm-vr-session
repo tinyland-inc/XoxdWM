@@ -9,7 +9,6 @@ set -euo pipefail
 export XDG_CURRENT_DESKTOP=EXWM-VR
 export XDG_SESSION_DESKTOP=EXWM-VR
 export XDG_SESSION_TYPE=wayland
-export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}"
 
 # ── Wayland toolkit hints ────────────────────────────────────────────
 # These ensure apps use Wayland natively instead of XWayland fallback.
@@ -21,6 +20,7 @@ export CLUTTER_BACKEND=wayland
 export ECORE_EVAS_ENGINE=wayland-egl
 export ELM_ENGINE=wayland_egl
 export GDK_BACKEND=wayland,x11
+export ELECTRON_OZONE_PLATFORM_HINT=auto
 
 # ── Cursor ────────────────────────────────────────────────────────────
 export XCURSOR_THEME="${XCURSOR_THEME:-Adwaita}"
@@ -64,14 +64,23 @@ cleanup() {
 }
 trap cleanup EXIT
 
-export WLR_RENDERER=gles2
-
 # Start the compositor in the background.
-/usr/bin/ewwm-compositor --wayland-socket "${XDG_RUNTIME_DIR}/wayland-1" &
+/usr/bin/ewwm-compositor &
 COMPOSITOR_PID=$!
 
-# Give the compositor a moment to create the Wayland socket.
-sleep 1
+# Wait for the Wayland socket to appear (up to 5 seconds).
+WAYLAND_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/wayland-1"
+for _ in $(seq 1 50); do
+    if [ -S "$WAYLAND_SOCKET" ]; then
+        break
+    fi
+    sleep 0.1
+done
+if [ ! -S "$WAYLAND_SOCKET" ]; then
+    echo "ERROR: Wayland socket did not appear at $WAYLAND_SOCKET" >&2
+    exit 1
+fi
+export WAYLAND_DISPLAY=wayland-1
 
 # Start Emacs as a foreground daemon.
 /usr/bin/emacs --fg-daemon=exwm-vr -l ewwm &

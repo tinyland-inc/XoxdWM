@@ -1,7 +1,7 @@
 [Unit]
 Description=EXWM-VR Monado OpenXR Runtime
 Documentation=https://github.com/Jesssullivan/XoxdWM
-After=graphical-session.target
+After=exwm-vr-compositor.service
 ConditionPathExists=/etc/xdg/openxr/1/active_runtime.json
 PartOf=exwm-vr.target
 

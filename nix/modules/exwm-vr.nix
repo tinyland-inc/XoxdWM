@@ -210,16 +210,35 @@ in {
 
       # ── Session variables ───────────────────────────────────────────
       environment.sessionVariables = {
-        XDG_CURRENT_DESKTOP = "ewwm";
-        WAYLAND_DISPLAY = "wayland-1";
+        XDG_CURRENT_DESKTOP = "EXWM-VR";
+        XDG_SESSION_TYPE = "wayland";
         # Prefer Wayland backends for toolkit applications
-        GDK_BACKEND = "wayland";
+        GDK_BACKEND = "wayland,x11";
         QT_QPA_PLATFORM = "wayland";
         SDL_VIDEODRIVER = "wayland";
         CLUTTER_BACKEND = "wayland";
         MOZ_ENABLE_WAYLAND = "1";
         _JAVA_AWT_WM_NONREPARENTING = "1";
+        ELECTRON_OZONE_PLATFORM_HINT = "auto";
+        XCURSOR_THEME = "Adwaita";
+        XCURSOR_SIZE = "24";
       };
+
+      # ── Display manager session registration ─────────────────────
+      services.displayManager.sessionPackages = [
+        (pkgs.runCommand "exwm-vr-session" { } ''
+          mkdir -p $out/share/wayland-sessions
+          cat > $out/share/wayland-sessions/exwm-vr.desktop << 'EOF'
+          [Desktop Entry]
+          Name=EXWM-VR
+          Comment=VR-first Emacs Window Manager (Wayland)
+          Exec=${cfg.compositor.package}/bin/ewwm-compositor
+          TryExec=${cfg.compositor.package}/bin/ewwm-compositor
+          Type=Application
+          DesktopNames=EXWM-VR;
+          EOF
+        '')
+      ];
 
       # ── Required system packages ────────────────────────────────────
       environment.systemPackages = [
@@ -245,8 +264,7 @@ in {
         before = [ "ewwm-emacs.service" ];
 
         environment = {
-          WAYLAND_DISPLAY = "wayland-1";
-          XDG_CURRENT_DESKTOP = "ewwm";
+          XDG_CURRENT_DESKTOP = "EXWM-VR";
           __EGL_VENDOR_LIBRARY_DIRS = "/run/opengl-driver/share/glvnd/egl_vendor.d";
         };
 
@@ -274,8 +292,7 @@ in {
         wantedBy = [ "graphical-session.target" ];
 
         environment = {
-          WAYLAND_DISPLAY = "wayland-1";
-          XDG_CURRENT_DESKTOP = "ewwm";
+          XDG_CURRENT_DESKTOP = "EXWM-VR";
         };
 
         serviceConfig = let

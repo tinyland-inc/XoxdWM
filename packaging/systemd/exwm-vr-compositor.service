@@ -4,12 +4,10 @@ Documentation=https://github.com/Jesssullivan/XoxdWM
 PartOf=exwm-vr.target
 
 [Service]
-Type=notify
-NotifyAccess=main
-ExecStart=/usr/bin/ewwm-compositor --wayland-socket %t/wayland-1
+Type=simple
+ExecStart=/usr/bin/ewwm-compositor
 Restart=on-failure
 RestartSec=3
-Environment=WLR_RENDERER=gles2
 Environment=XDG_CURRENT_DESKTOP=EXWM-VR
 Environment=XDG_SESSION_TYPE=wayland
 

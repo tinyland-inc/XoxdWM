@@ -105,14 +105,13 @@ Returns list of check results."
 Returns list of check results."
   (let (results)
     (push (ewwm-environment--check-executable "ewwm-compositor" t) results)
-    (push (ewwm-environment--check-env-var "WLR_RENDERER") results)
     (nreverse results)))
 
 (defun ewwm-environment--check-dbus ()
   "Check D-Bus session readiness.
 Returns list of check results."
   (let (results)
-    (push (ewwm-environment--check-env-var "DBUS_SESSION_BUS_ADDRESS" t) results)
+    (push (ewwm-environment--check-env-var "DBUS_SESSION_BUS_ADDRESS") results)
     (push (ewwm-environment--check-executable "dbus-daemon") results)
     results))
 

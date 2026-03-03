@@ -196,7 +196,7 @@ in {
     emacs = {
       package = lib.mkOption {
         type = lib.types.package;
-        default = pkgs.emacs-pgtk or pkgs.emacs;
+        default = pkgs.emacs-pgtk;
         defaultText = lib.literalExpression "pkgs.emacs-pgtk";
         description = "Emacs package to use.";
       };
@@ -290,7 +290,6 @@ in {
           Unit = {
             Description = "EWWM Wayland Compositor";
             Documentation = "https://github.com/Jesssullivan/XoxdWM";
-            ConditionEnvironment = "WAYLAND_DISPLAY";
           };
           Service = {
             ExecStart = "${compositorBin} ${compositorArgs}";

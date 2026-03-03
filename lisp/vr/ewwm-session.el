@@ -35,8 +35,8 @@
 (defcustom ewwm-session-idle-args
   '("-w"
     "timeout" "300" "swaylock"
-    "timeout" "600" "swaymsg output * dpms off"
-    "resume" "swaymsg output * dpms on"
+    "timeout" "600" "emacsclient" "--eval" "(ewwm-dpms-set \"off\")"
+    "resume" "emacsclient" "--eval" "(ewwm-dpms-set \"on\")"
     "before-sleep" "swaylock")
   "Arguments passed to the idle command.
 Default: lock after 5 min, DPMS off after 10 min, lock before sleep."

@@ -2,6 +2,7 @@
 Name=EXWM-VR
 Comment=VR-first Emacs Window Manager (Wayland)
 Exec=/usr/share/exwm-vr/exwm-vr-session
+TryExec=/usr/bin/ewwm-compositor
 Type=Application
 DesktopNames=EXWM-VR;
 X-GDM-SessionRegisters=true
