@@ -26,6 +26,10 @@ let
     };
     "valve-index" = { };
     "quest3-wivrn" = { };
+    "bigscreen-beyond" = {
+      XRT_COMPOSITOR_DESIRED_MODE = "1";  # 90 Hz native for Beyond 2/2e
+      P_OVERRIDE_ACTIVE_CONFIG = "Bigscreen Beyond";
+    };
   };
 
   serviceEnv = baseEnv // headsetEnv.${cfg.headset};
@@ -43,7 +47,7 @@ in
     };
 
     headset = mkOption {
-      type = types.enum [ "auto" "simulated" "valve-index" "quest3-wivrn" ];
+      type = types.enum [ "auto" "simulated" "valve-index" "quest3-wivrn" "bigscreen-beyond" ];
       default = "auto";
       description = ''
         Headset driver selection.
@@ -52,6 +56,7 @@ in
         - `simulated`: force headless compositor (no HMD required).
         - `valve-index`: Valve Index via SteamVR/Lighthouse.
         - `quest3-wivrn`: Meta Quest 3 via WiVRn streaming.
+        - `bigscreen-beyond`: Bigscreen Beyond (1, 2, 2e) via USB.
       '';
     };
 

@@ -3,14 +3,18 @@
 use crate::ipc::{dispatch::format_event, server::IpcServer};
 use crate::state::{CursorImageStatus, EwwmState};
 use smithay::{
-    delegate_data_device, delegate_output, delegate_seat,
+    delegate_cursor_shape, delegate_data_device, delegate_output,
+    delegate_primary_selection, delegate_seat,
     input::{
         pointer::CursorImageStatus as SmithayCursorImageStatus,
         Seat, SeatHandler, SeatState,
     },
     reexports::wayland_server::protocol::wl_surface::WlSurface,
-    wayland::selection::data_device::{
-        ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
+    wayland::selection::{
+        data_device::{
+            ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
+        },
+        primary_selection::{PrimarySelectionHandler, PrimarySelectionState},
     },
 };
 use tracing::{debug, trace};
@@ -85,6 +89,14 @@ impl smithay::wayland::selection::SelectionHandler for EwwmState {
 
 impl smithay::wayland::output::OutputHandler for EwwmState {}
 
+impl PrimarySelectionHandler for EwwmState {
+    fn primary_selection_state(&self) -> &PrimarySelectionState {
+        &self.primary_selection_state
+    }
+}
+
 delegate_seat!(EwwmState);
 delegate_data_device!(EwwmState);
 delegate_output!(EwwmState);
+delegate_primary_selection!(EwwmState);
+delegate_cursor_shape!(EwwmState);
