@@ -1,7 +1,9 @@
 //! Wayland protocol handler implementations.
 
 pub mod compositor;
+pub mod data_control;
 pub mod dmabuf;
+pub mod dpms;
 pub mod foreign_toplevel;
 pub mod idle;
 pub mod layer_shell;

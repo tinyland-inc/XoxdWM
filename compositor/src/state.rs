@@ -46,6 +46,7 @@ use tracing::info;
 
 use crate::autotype::AutoTypeManager;
 use crate::clock::{Clock, SystemClock};
+use crate::handlers::dpms::DpmsState;
 use crate::ipc::IpcServer;
 use crate::secure_input::SecureInputState;
 use crate::vr::VrState;
@@ -197,6 +198,9 @@ pub struct EwwmState {
     pub headless_width: i32,
     pub headless_height: i32,
 
+    // DPMS output power state
+    pub dpms_state: DpmsState,
+
     // Focus tracking
     pub focused_surface: Option<u64>,
 
@@ -313,6 +317,7 @@ impl EwwmState {
             headless_output_count: 0,
             headless_width: 1920,
             headless_height: 1080,
+            dpms_state: DpmsState::default(),
             focused_surface: None,
             cursor_status: CursorImageStatus::Default,
             running: true,

@@ -176,6 +176,9 @@ pub fn handle_message(state: &mut EwwmState, client_id: u64, raw: &str) -> Optio
         // BCI fatigue EEG
         Some("bci-fatigue-eeg-status") => handle_bci_fatigue_eeg_status(state, msg_id),
         Some("bci-fatigue-eeg-config") => handle_bci_fatigue_eeg_config(state, msg_id, &value),
+        // DPMS output power
+        Some("dpms-get") => handle_dpms_get(state, msg_id),
+        Some("dpms-set") => handle_dpms_set(state, msg_id, &value),
         // IPC recording (v0.2.0)
         Some("ipc-record-start") => handle_ipc_record_start(state, msg_id, &value),
         Some("ipc-record-stop") => handle_ipc_record_stop(state, msg_id),
@@ -1645,6 +1648,52 @@ fn handle_headless_remove_output(state: &mut EwwmState, msg_id: i64) -> Option<S
         "(:type :response :id {} :status :ok :removed-index {} :outputs {})",
         msg_id, removed_index, state.headless_output_count
     ))
+}
+
+// ── DPMS handlers ──────────────────────────────────────────
+
+fn handle_dpms_get(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    Some(format!(
+        "(:type :response :id {} :status :ok :dpms-state \"{}\")",
+        msg_id, state.dpms_state,
+    ))
+}
+
+fn handle_dpms_set(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    use crate::handlers::dpms::DpmsState;
+
+    let state_str = match get_string(value, "state") {
+        Some(s) => s,
+        None => return Some(error_response(msg_id, "missing :state field")),
+    };
+
+    match DpmsState::from_str_ipc(&state_str) {
+        Some(new_state) => {
+            let old = state.dpms_state;
+            state.dpms_state = new_state;
+            debug!(?old, ?new_state, "DPMS state changed");
+
+            // Notify Emacs of the state change
+            let event = format_event(
+                "dpms-changed",
+                &[("state", &new_state.to_string())],
+            );
+            IpcServer::broadcast_event(state, &event);
+
+            Some(format!(
+                "(:type :response :id {} :status :ok :dpms-state \"{}\")",
+                msg_id, new_state,
+            ))
+        }
+        None => Some(error_response(
+            msg_id,
+            &format!("invalid DPMS state: {} (use on/standby/suspend/off)", state_str),
+        )),
+    }
 }
 
 // ── Gaze scroll handlers ───────────────────────────────────
