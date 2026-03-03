@@ -98,7 +98,6 @@ impl Default for HmdInfo {
 }
 
 /// Data returned from a VR frame tick for the renderer.
-#[derive(Debug)]
 pub struct VrFrameData {
     /// Per-eye view poses and FOVs from locate_views.
     pub views: Vec<xr::View>,
@@ -106,6 +105,16 @@ pub struct VrFrameData {
     pub predicted_display_time: xr::Time,
     /// Whether we should render (false = submit empty frame).
     pub should_render: bool,
+}
+
+impl std::fmt::Debug for VrFrameData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VrFrameData")
+            .field("views_count", &self.views.len())
+            .field("predicted_display_time", &self.predicted_display_time)
+            .field("should_render", &self.should_render)
+            .finish()
+    }
 }
 
 /// Central VR state managing the full OpenXR lifecycle.
@@ -356,7 +365,8 @@ impl VrState {
         // Create OpenGL graphics binding
         let session_create_info = xr::opengl::SessionCreateInfo::Xlib {
             x_display: std::ptr::null_mut(),
-            glx_fb_config: 0,
+            visualid: 0,
+            glx_fb_config: std::ptr::null_mut(),
             glx_drawable: 0,
             glx_context: egl_context as _,
         };
@@ -378,7 +388,7 @@ impl VrState {
         )?;
 
         // Enumerate swapchain formats (prefer SRGB8_ALPHA8)
-        let formats = session.enumerate_swapchain_formats()?;
+        let formats: Vec<u32> = session.enumerate_swapchain_formats()?;
         let format = select_swapchain_format(&formats);
         info!("VR: selected swapchain format: 0x{:X}", format);
 
@@ -400,11 +410,7 @@ impl VrState {
                 mip_count: 1,
             })?;
 
-            let images: Vec<u32> = swapchain
-                .enumerate_images()?
-                .into_iter()
-                .map(|img| img.image)
-                .collect();
+            let images: Vec<u32> = swapchain.enumerate_images()?;
 
             info!(
                 "VR: eye {} swapchain: {}x{}, {} images",
@@ -480,7 +486,7 @@ impl VrState {
             VrSessionState::Ready => {
                 if let Some(session) = &self.session {
                     match session.begin(xr::ViewConfigurationType::PRIMARY_STEREO) {
-                        Ok(()) => info!("VR: session begun (PRIMARY_STEREO)"),
+                        Ok(_) => info!("VR: session begun (PRIMARY_STEREO)"),
                         Err(e) => error!("VR: failed to begin session: {}", e),
                     }
                 } else {
@@ -490,7 +496,7 @@ impl VrState {
             VrSessionState::Stopping => {
                 if let Some(session) = &self.session {
                     match session.end() {
-                        Ok(()) => info!("VR: session ended"),
+                        Ok(_) => info!("VR: session ended"),
                         Err(e) => error!("VR: failed to end session: {}", e),
                     }
                 }
@@ -592,6 +598,10 @@ impl VrState {
             None => return,
         };
 
+        // Collect state changes first to avoid borrow conflict:
+        // instance.poll_event() borrows self.instance immutably, but
+        // handle_state_change() needs &mut self.
+        let mut state_changes: Vec<VrSessionState> = Vec::new();
         let mut event_buffer = xr::EventDataBuffer::new();
         while let Ok(Some(event)) = instance.poll_event(&mut event_buffer) {
             match event {
@@ -610,11 +620,11 @@ impl VrState {
                             continue;
                         }
                     };
-                    self.handle_state_change(new_state);
+                    state_changes.push(new_state);
                 }
                 xr::Event::InstanceLossPending(_) => {
                     warn!("VR: instance loss pending");
-                    self.handle_state_change(VrSessionState::LossPending);
+                    state_changes.push(VrSessionState::LossPending);
                 }
                 xr::Event::EventsLost(lost) => {
                     warn!("VR: {} events lost", lost.lost_event_count());
@@ -623,6 +633,11 @@ impl VrState {
                     debug!("VR: unhandled event");
                 }
             }
+        }
+
+        // Now process collected state changes with full mutable access to self
+        for new_state in state_changes {
+            self.handle_state_change(new_state);
         }
     }
 
@@ -708,18 +723,20 @@ impl VrState {
     }
 
     /// End a frame with the given composition layers.
-    pub fn end_frame(
+    pub fn end_frame<'a>(
         &mut self,
         predicted_time: xr::Time,
-        layers: &[xr::CompositionLayerProjection<xr::OpenGL>],
+        layers: &[xr::CompositionLayerProjection<'a, xr::OpenGL>],
     ) {
         let frame_stream = match self.frame_stream.as_mut() {
             Some(fs) => fs,
             None => return,
         };
 
-        let layer_refs: Vec<&xr::CompositionLayerBase<xr::OpenGL>> =
-            layers.iter().map(|l| l as &xr::CompositionLayerBase<xr::OpenGL>).collect();
+        // CompositionLayerProjection Derefs to CompositionLayerBase
+        use std::ops::Deref;
+        let layer_refs: Vec<&xr::CompositionLayerBase<'_, xr::OpenGL>> =
+            layers.iter().map(|l| l.deref()).collect();
 
         if let Err(e) = frame_stream.end(
             predicted_time,
@@ -786,10 +803,10 @@ impl VrState {
 
 /// Select the best swapchain format from available formats.
 /// Prefers SRGB8_ALPHA8, falls back to RGBA8, then first available.
-fn select_swapchain_format(formats: &[i64]) -> i64 {
-    const GL_SRGB8_ALPHA8: i64 = 0x8C43;
-    const GL_RGBA8: i64 = 0x8058;
-    const GL_RGBA16F: i64 = 0x881A;
+fn select_swapchain_format(formats: &[u32]) -> u32 {
+    const GL_SRGB8_ALPHA8: u32 = 0x8C43;
+    const GL_RGBA8: u32 = 0x8058;
+    const GL_RGBA16F: u32 = 0x881A;
 
     if formats.contains(&GL_SRGB8_ALPHA8) {
         GL_SRGB8_ALPHA8
