@@ -15,6 +15,7 @@
 (declare-function ewwm-ipc-send "ewwm-ipc")
 (declare-function ewwm-ipc-send-sync "ewwm-ipc")
 (declare-function ewwm-ipc-connected-p "ewwm-ipc")
+(declare-function ewwm-ipc-register-events "ewwm-ipc")
 
 ;; ── Customization ────────────────────────────────────────────
 
@@ -214,14 +215,10 @@ PROJECTION is a symbol: `flat' or `cylinder'."
 
 (defun ewwm-vr-scene--register-events ()
   "Register VR scene event handlers with IPC dispatch."
-  (when (boundp 'ewwm-ipc--event-handlers)
-    (let ((handlers
-           '((:vr-scene-layout-changed  . ewwm-vr-scene--on-layout-changed)
-             (:vr-scene-surface-added   . ewwm-vr-scene--on-surface-added)
-             (:vr-scene-surface-removed . ewwm-vr-scene--on-surface-removed))))
-      (dolist (handler handlers)
-        (unless (assq (car handler) ewwm-ipc--event-handlers)
-          (push handler ewwm-ipc--event-handlers))))))
+  (ewwm-ipc-register-events
+   '((:vr-scene-layout-changed  . ewwm-vr-scene--on-layout-changed)
+     (:vr-scene-surface-added   . ewwm-vr-scene--on-surface-added)
+     (:vr-scene-surface-removed . ewwm-vr-scene--on-surface-removed))))
 
 ;; ── Initialization ───────────────────────────────────────────
 

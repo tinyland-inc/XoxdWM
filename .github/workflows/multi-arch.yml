@@ -3,8 +3,22 @@ name: Multi-Architecture Build & Test
 on:
   push:
     branches: [main, dev, 'feature/*']
+    paths:
+      - 'lisp/**'
+      - 'test/**'
+      - 'compositor/**'
+      - 'nix/**'
+      - 'flake.nix'
+      - 'flake.lock'
   pull_request:
     branches: [main, dev]
+    paths:
+      - 'lisp/**'
+      - 'test/**'
+      - 'compositor/**'
+      - 'nix/**'
+      - 'flake.nix'
+      - 'flake.lock'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

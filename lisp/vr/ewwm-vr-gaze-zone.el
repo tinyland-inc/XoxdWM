@@ -13,6 +13,7 @@
 
 (declare-function ewwm-ipc-send "ewwm-ipc")
 (declare-function ewwm-ipc-connected-p "ewwm-ipc")
+(declare-function ewwm-ipc-register-events "ewwm-ipc")
 
 ;; ── Customization ────────────────────────────────────────────
 
@@ -269,15 +270,11 @@ Returns \" [Zone:TL C-x]\" when active, or nil."
 (defun ewwm-vr-gaze-zone--register-events ()
   "Register gaze zone event handlers with IPC event dispatch.
 Idempotent: will not duplicate handlers."
-  (when (boundp 'ewwm-ipc--event-handlers)
-    (let ((handlers
-           '((:gaze-zone-entered        . ewwm-vr-gaze-zone--on-zone-entered)
-             (:gaze-zone-activated       . ewwm-vr-gaze-zone--on-zone-activated)
-             (:gaze-zone-deactivated     . ewwm-vr-gaze-zone--on-zone-deactivated)
-             (:gaze-zone-dwell-progress  . ewwm-vr-gaze-zone--on-zone-dwell-progress))))
-      (dolist (handler handlers)
-        (unless (assq (car handler) ewwm-ipc--event-handlers)
-          (push handler ewwm-ipc--event-handlers))))))
+  (ewwm-ipc-register-events
+   '((:gaze-zone-entered        . ewwm-vr-gaze-zone--on-zone-entered)
+     (:gaze-zone-activated       . ewwm-vr-gaze-zone--on-zone-activated)
+     (:gaze-zone-deactivated     . ewwm-vr-gaze-zone--on-zone-deactivated)
+     (:gaze-zone-dwell-progress  . ewwm-vr-gaze-zone--on-zone-dwell-progress))))
 
 ;; ── Minor mode ─────────────────────────────────────────────────
 

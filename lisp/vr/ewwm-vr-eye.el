@@ -16,6 +16,7 @@
 (declare-function ewwm-ipc-send "ewwm-ipc")
 (declare-function ewwm-ipc-send-sync "ewwm-ipc")
 (declare-function ewwm-ipc-connected-p "ewwm-ipc")
+(declare-function ewwm-ipc-register-events "ewwm-ipc")
 
 ;; ── Customization ────────────────────────────────────────────
 
@@ -627,23 +628,19 @@ POLICY is a symbol: `gaze-only', `gaze-primary', `gaze-assist', or `disabled'."
 
 (defun ewwm-vr-eye--register-events ()
   "Register eye tracking event handlers with IPC event dispatch."
-  (when (boundp 'ewwm-ipc--event-handlers)
-    (let ((handlers
-           '((:gaze-data             . ewwm-vr-eye--on-gaze-data)
-             (:gaze-target-changed   . ewwm-vr-eye--on-gaze-target-changed)
-             (:gaze-fixation         . ewwm-vr-eye--on-gaze-fixation)
-             (:gaze-saccade          . ewwm-vr-eye--on-gaze-saccade)
-             (:gaze-tracking-lost    . ewwm-vr-eye--on-gaze-tracking-lost)
-             (:gaze-calibration-drift . ewwm-vr-eye--on-gaze-calibration-drift)
-             (:gaze-dwell            . ewwm-vr-eye--on-gaze-dwell)
-             (:gaze-dwell-progress   . ewwm-vr-eye--on-gaze-dwell-progress)
-             (:gaze-focus-request    . ewwm-vr-eye--on-gaze-focus-request)
-             (:gaze-cooldown         . ewwm-vr-eye--on-gaze-cooldown)
-             (:gaze-saccade-state    . ewwm-vr-eye--on-gaze-saccade-state)
-             (:gaze-reading-mode     . ewwm-vr-eye--on-gaze-reading-mode))))
-      (dolist (handler handlers)
-        (unless (assq (car handler) ewwm-ipc--event-handlers)
-          (push handler ewwm-ipc--event-handlers))))))
+  (ewwm-ipc-register-events
+   '((:gaze-data             . ewwm-vr-eye--on-gaze-data)
+     (:gaze-target-changed   . ewwm-vr-eye--on-gaze-target-changed)
+     (:gaze-fixation         . ewwm-vr-eye--on-gaze-fixation)
+     (:gaze-saccade          . ewwm-vr-eye--on-gaze-saccade)
+     (:gaze-tracking-lost    . ewwm-vr-eye--on-gaze-tracking-lost)
+     (:gaze-calibration-drift . ewwm-vr-eye--on-gaze-calibration-drift)
+     (:gaze-dwell            . ewwm-vr-eye--on-gaze-dwell)
+     (:gaze-dwell-progress   . ewwm-vr-eye--on-gaze-dwell-progress)
+     (:gaze-focus-request    . ewwm-vr-eye--on-gaze-focus-request)
+     (:gaze-cooldown         . ewwm-vr-eye--on-gaze-cooldown)
+     (:gaze-saccade-state    . ewwm-vr-eye--on-gaze-saccade-state)
+     (:gaze-reading-mode     . ewwm-vr-eye--on-gaze-reading-mode))))
 
 ;; ── Minor mode ───────────────────────────────────────────────
 

@@ -15,6 +15,7 @@
 
 (declare-function ewwm-ipc-send "ewwm-ipc")
 (declare-function ewwm-ipc-connected-p "ewwm-ipc")
+(declare-function ewwm-ipc-register-events "ewwm-ipc")
 
 ;; ── Customization ────────────────────────────────────────────
 
@@ -214,15 +215,9 @@ Shows last class and confidence."
 (defun ewwm-bci-mi--register-events ()
   "Register MI event handlers with IPC dispatch.
 Idempotent: checks before adding each handler."
-  (when (boundp 'ewwm-ipc--event-handlers)
-    (let ((handlers
-           '((:bci-mi . ewwm-bci-mi--on-bci-mi)
-             (:bci-mi-calibration
-              . ewwm-bci-mi--on-bci-mi-calibration))))
-      (dolist (handler handlers)
-        (unless (assq (car handler)
-                      ewwm-ipc--event-handlers)
-          (push handler ewwm-ipc--event-handlers))))))
+  (ewwm-ipc-register-events
+   '((:bci-mi             . ewwm-bci-mi--on-bci-mi)
+     (:bci-mi-calibration . ewwm-bci-mi--on-bci-mi-calibration))))
 
 ;; ── Init / teardown ─────────────────────────────────────────
 

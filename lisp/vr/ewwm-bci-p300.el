@@ -16,6 +16,7 @@
 
 (declare-function ewwm-ipc-send "ewwm-ipc")
 (declare-function ewwm-ipc-connected-p "ewwm-ipc")
+(declare-function ewwm-ipc-register-events "ewwm-ipc")
 
 ;; ── Customization ────────────────────────────────────────────
 
@@ -238,13 +239,8 @@ or (nil nil) on timeout/cancel."
 (defun ewwm-bci-p300--register-events ()
   "Register P300 event handlers with IPC dispatch.
 Idempotent: checks before adding each handler."
-  (when (boundp 'ewwm-ipc--event-handlers)
-    (let ((handlers
-           '((:bci-p300 . ewwm-bci-p300--on-bci-p300))))
-      (dolist (handler handlers)
-        (unless (assq (car handler)
-                      ewwm-ipc--event-handlers)
-          (push handler ewwm-ipc--event-handlers))))))
+  (ewwm-ipc-register-events
+   '((:bci-p300 . ewwm-bci-p300--on-bci-p300))))
 
 ;; ── Init / teardown ─────────────────────────────────────────
 

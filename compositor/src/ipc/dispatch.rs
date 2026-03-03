@@ -72,7 +72,7 @@ pub fn handle_message(state: &mut EwwmState, client_id: u64, raw: &str) -> Optio
         Some("vr-set-follow") => handle_vr_set_follow(state, msg_id, &value),
         Some("vr-set-gaze-offset") => handle_vr_set_gaze_offset(state, msg_id, &value),
         Some("vr-calibrate-confirm") => handle_vr_calibrate_confirm(state, msg_id),
-        // Eye tracking (Week 11)
+        // Eye tracking and gaze control
         Some("gaze-status") => handle_gaze_status(state, msg_id),
         Some("gaze-set-source") => handle_gaze_set_source(state, msg_id, &value),
         Some("gaze-calibrate-start") => handle_gaze_calibrate_start(state, msg_id, &value),
@@ -81,7 +81,7 @@ pub fn handle_message(state: &mut EwwmState, client_id: u64, raw: &str) -> Optio
         Some("gaze-set-smoothing") => handle_gaze_set_smoothing(state, msg_id, &value),
         Some("gaze-simulate") => handle_gaze_simulate(state, msg_id, &value),
         Some("gaze-health") => handle_gaze_health(state, msg_id),
-        // Gaze focus (Week 12)
+        // Gaze focus and dwell
         Some("gaze-focus-config") => handle_gaze_focus_config(state, msg_id),
         Some("gaze-focus-status") => handle_gaze_focus_status(state, msg_id),
         Some("gaze-focus-set-policy") => handle_gaze_focus_set_policy(state, msg_id, &value),
@@ -89,26 +89,26 @@ pub fn handle_message(state: &mut EwwmState, client_id: u64, raw: &str) -> Optio
         Some("gaze-focus-set-cooldown") => handle_gaze_focus_set_cooldown(state, msg_id, &value),
         Some("gaze-focus-analytics") => handle_gaze_focus_analytics(state, msg_id),
         Some("gaze-focus-back") => handle_gaze_focus_back(state, msg_id),
-        // Blink/wink (Week 13)
+        // Blink/wink detection
         Some("wink-status") => handle_wink_status(state, msg_id),
         Some("wink-config") => handle_wink_config(state, msg_id),
         Some("wink-calibrate-start") => handle_wink_calibrate_start(state, msg_id, &value),
         Some("wink-set-confidence") => handle_wink_set_confidence(state, msg_id, &value),
-        // Gaze zones (Week 13)
+        // Gaze zones
         Some("gaze-zone-status") => handle_gaze_zone_status(state, msg_id),
         Some("gaze-zone-config") => handle_gaze_zone_config(state, msg_id),
         Some("gaze-zone-set-dwell") => handle_gaze_zone_set_dwell(state, msg_id, &value),
-        // Fatigue (Week 13)
+        // Eye fatigue monitoring
         Some("fatigue-status") => handle_fatigue_status(state, msg_id),
         Some("fatigue-config") => handle_fatigue_config(state, msg_id),
         Some("fatigue-metrics") => handle_fatigue_metrics(state, msg_id),
         Some("fatigue-reset") => handle_fatigue_reset(state, msg_id),
-        // Headless backend (Week 16)
+        // Headless backend
         Some("headless-status") => handle_headless_status(state, msg_id),
         Some("headless-set-resolution") => handle_headless_set_resolution(state, msg_id, &value),
         Some("headless-add-output") => handle_headless_add_output(state, msg_id),
         Some("headless-remove-output") => handle_headless_remove_output(state, msg_id),
-        // Auto-type & secure input (Week 14)
+        // Auto-type and secure input
         Some("autotype") => handle_autotype(state, msg_id, &value),
         Some("autotype-status") => handle_autotype_status(state, msg_id),
         Some("autotype-abort") => handle_autotype_abort(state, msg_id),
@@ -117,7 +117,7 @@ pub fn handle_message(state: &mut EwwmState, client_id: u64, raw: &str) -> Optio
         Some("secure-input-mode") => handle_secure_input_mode(state, msg_id, &value),
         Some("secure-input-status") => handle_secure_input_status(state, msg_id),
         Some("gaze-away-monitor") => handle_gaze_away_monitor(state, msg_id, &value),
-        // Gaze scroll & link hints (Week 17)
+        // Gaze scroll and link hints
         Some("gaze-scroll-status") => handle_gaze_scroll_status(state, msg_id),
         Some("gaze-scroll-config") => handle_gaze_scroll_config(state, msg_id, &value),
         Some("gaze-scroll-set-speed") => handle_gaze_scroll_set_speed(state, msg_id, &value),
@@ -125,25 +125,25 @@ pub fn handle_message(state: &mut EwwmState, client_id: u64, raw: &str) -> Optio
         Some("link-hints-confirm") => handle_link_hints_confirm(state, msg_id),
         Some("link-hints-clear") => handle_link_hints_clear(state, msg_id),
         Some("link-hints-status") => handle_link_hints_status(state, msg_id),
-        // Hand tracking (Week 18)
+        // Hand tracking
         Some("hand-tracking-status") => handle_hand_tracking_status(state, msg_id),
         Some("hand-tracking-config") => handle_hand_tracking_config(state, msg_id, &value),
         Some("hand-tracking-joint") => handle_hand_tracking_joint(state, msg_id, &value),
         Some("hand-tracking-skeleton") => handle_hand_tracking_skeleton(state, msg_id, &value),
         Some("hand-tracking-distance") => handle_hand_tracking_distance(state, msg_id, &value),
-        // Gesture (Week 18)
+        // Gesture recognition
         Some("gesture-status") => handle_gesture_status(state, msg_id),
         Some("gesture-config") => handle_gesture_config(state, msg_id, &value),
         Some("gesture-bind") => handle_gesture_bind(state, msg_id, &value),
         Some("gesture-unbind") => handle_gesture_unbind(state, msg_id, &value),
         Some("gesture-bindings") => handle_gesture_bindings(state, msg_id),
-        // Virtual keyboard (Week 18)
+        // Virtual keyboard
         Some("keyboard-show") => handle_keyboard_show(state, msg_id),
         Some("keyboard-hide") => handle_keyboard_hide(state, msg_id),
         Some("keyboard-toggle") => handle_keyboard_toggle(state, msg_id),
         Some("keyboard-layout") => handle_keyboard_layout(state, msg_id, &value),
         Some("keyboard-status") => handle_keyboard_status(state, msg_id),
-        // BCI (Week 19)
+        // BCI core
         Some("bci-status") => handle_bci_status(state, msg_id),
         Some("bci-start") => handle_bci_start(state, msg_id),
         Some("bci-stop") => handle_bci_stop(state, msg_id),
@@ -153,27 +153,27 @@ pub fn handle_message(state: &mut EwwmState, client_id: u64, raw: &str) -> Optio
         Some("bci-inject-synthetic") => handle_bci_inject_synthetic(state, msg_id, &value),
         Some("bci-data-list") => handle_bci_data_list(state, msg_id),
         Some("bci-data-delete") => handle_bci_data_delete(state, msg_id, &value),
-        // BCI attention (Week 19)
+        // BCI attention
         Some("bci-attention-status") => handle_bci_attention_status(state, msg_id),
         Some("bci-attention-config") => handle_bci_attention_config(state, msg_id, &value),
         Some("bci-attention-calibrate-start") => handle_bci_attention_calibrate_start(state, msg_id),
         Some("bci-attention-calibrate-finish") => handle_bci_attention_calibrate_finish(state, msg_id),
-        // BCI SSVEP (Week 19)
+        // BCI SSVEP
         Some("bci-ssvep-status") => handle_bci_ssvep_status(state, msg_id),
         Some("bci-ssvep-config") => handle_bci_ssvep_config(state, msg_id, &value),
         Some("bci-ssvep-start") => handle_bci_ssvep_start(state, msg_id),
         Some("bci-ssvep-stop") => handle_bci_ssvep_stop(state, msg_id),
-        // BCI P300 (Week 19)
+        // BCI P300
         Some("bci-p300-status") => handle_bci_p300_status(state, msg_id),
         Some("bci-p300-config") => handle_bci_p300_config(state, msg_id, &value),
         Some("bci-p300-start") => handle_bci_p300_start(state, msg_id, &value),
         Some("bci-p300-stop") => handle_bci_p300_stop(state, msg_id),
-        // BCI motor imagery (Week 19)
+        // BCI motor imagery
         Some("bci-mi-status") => handle_bci_mi_status(state, msg_id),
         Some("bci-mi-config") => handle_bci_mi_config(state, msg_id, &value),
         Some("bci-mi-calibrate-start") => handle_bci_mi_calibrate_start(state, msg_id),
         Some("bci-mi-calibrate-finish") => handle_bci_mi_calibrate_finish(state, msg_id),
-        // BCI fatigue EEG (Week 19)
+        // BCI fatigue EEG
         Some("bci-fatigue-eeg-status") => handle_bci_fatigue_eeg_status(state, msg_id),
         Some("bci-fatigue-eeg-config") => handle_bci_fatigue_eeg_config(state, msg_id, &value),
         // IPC recording (v0.2.0)
@@ -1043,7 +1043,7 @@ fn handle_vr_calibrate_confirm(state: &mut EwwmState, msg_id: i64) -> Option<Str
     }
 }
 
-// ── Eye tracking handlers (Week 11) ───────────────────────
+// ── Eye tracking handlers ──────────────────────────────────
 
 fn handle_gaze_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
     let status = state.vr_state.eye_tracking.status_sexp();
@@ -1200,7 +1200,7 @@ fn handle_gaze_health(state: &mut EwwmState, msg_id: i64) -> Option<String> {
     ))
 }
 
-// ── Gaze focus handlers (Week 12) ──────────────────────────
+// ── Gaze focus handlers ────────────────────────────────────
 
 fn handle_gaze_focus_config(state: &mut EwwmState, msg_id: i64) -> Option<String> {
     let config = state.vr_state.gaze_focus.config_sexp();
@@ -1290,7 +1290,7 @@ fn handle_gaze_focus_back(state: &mut EwwmState, msg_id: i64) -> Option<String> 
     }
 }
 
-// ── Blink/wink handlers (Week 13) ──────────────────────────
+// ── Blink/wink handlers ────────────────────────────────────
 
 fn handle_wink_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
     let status = state.vr_state.blink_wink.status_sexp();
@@ -1337,7 +1337,7 @@ fn handle_wink_set_confidence(
     ))
 }
 
-// ── Gaze zone handlers (Week 13) ──────────────────────────
+// ── Gaze zone handlers ─────────────────────────────────────
 
 fn handle_gaze_zone_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
     let status = state.vr_state.zone_detector.status_sexp();
@@ -1372,7 +1372,7 @@ fn handle_gaze_zone_set_dwell(
     ))
 }
 
-// ── Fatigue handlers (Week 13) ─────────────────────────────
+// ── Eye fatigue handlers ───────────────────────────────────
 
 fn handle_fatigue_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
     let status = state.vr_state.fatigue_monitor.status_sexp();
@@ -1403,7 +1403,7 @@ fn handle_fatigue_reset(state: &mut EwwmState, msg_id: i64) -> Option<String> {
     Some(ok_response(msg_id))
 }
 
-// ── Auto-type handlers (Week 14) ───────────────────────────
+// ── Auto-type handlers ─────────────────────────────────────
 
 fn handle_autotype(
     state: &mut EwwmState,
@@ -1470,7 +1470,7 @@ fn handle_autotype_resume(state: &mut EwwmState, msg_id: i64) -> Option<String> 
     Some(ok_response(msg_id))
 }
 
-// ── Secure input handlers (Week 14) ────────────────────────
+// ── Secure input handlers ──────────────────────────────────
 
 fn handle_secure_input_mode(
     state: &mut EwwmState,
@@ -1532,7 +1532,7 @@ fn handle_gaze_away_monitor(
     Some(ok_response(msg_id))
 }
 
-// ── Headless backend handlers (Week 16) ────────────────────
+// ── Headless backend handlers ──────────────────────────────
 
 fn handle_headless_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
     let active = if state.headless_active { "t" } else { "nil" };
@@ -1647,7 +1647,7 @@ fn handle_headless_remove_output(state: &mut EwwmState, msg_id: i64) -> Option<S
     ))
 }
 
-// ── Gaze scroll handlers (Week 17) ─────────────────────────
+// ── Gaze scroll handlers ───────────────────────────────────
 
 fn handle_gaze_scroll_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
     let status = state.vr_state.gaze_scroll.status_sexp();
@@ -1704,7 +1704,7 @@ fn handle_gaze_scroll_set_speed(
     ))
 }
 
-// ── Link hint handlers (Week 17) ───────────────────────────
+// ── Link hint handlers ─────────────────────────────────────
 
 fn handle_link_hints_load(
     state: &mut EwwmState,
@@ -1751,7 +1751,7 @@ fn handle_link_hints_status(state: &mut EwwmState, msg_id: i64) -> Option<String
     ))
 }
 
-// ── Hand tracking handlers (Week 18) ───────────────────────
+// ── Hand tracking handlers ─────────────────────────────────
 
 fn handle_hand_tracking_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
     let status = state.vr_state.hand_tracking.status_sexp();
@@ -1889,7 +1889,7 @@ fn handle_hand_tracking_distance(
     }
 }
 
-// ── Gesture handlers (Week 18) ─────────────────────────────
+// ── Gesture handlers ───────────────────────────────────────
 
 fn handle_gesture_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
     let status = state.vr_state.gesture.status_sexp();
@@ -1990,7 +1990,7 @@ fn handle_gesture_bindings(state: &mut EwwmState, msg_id: i64) -> Option<String>
     ))
 }
 
-// ── Virtual keyboard handlers (Week 18) ────────────────────
+// ── Virtual keyboard handlers ──────────────────────────────
 
 fn handle_keyboard_show(state: &mut EwwmState, msg_id: i64) -> Option<String> {
     state.vr_state.virtual_keyboard.show();
@@ -2041,7 +2041,7 @@ fn handle_keyboard_status(state: &mut EwwmState, msg_id: i64) -> Option<String> 
     ))
 }
 
-// ── BCI handlers (Week 19) ──────────────────────────────────
+// ── BCI handlers ───────────────────────────────────────────
 
 fn handle_bci_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
     let status = state.vr_state.bci.status_sexp();

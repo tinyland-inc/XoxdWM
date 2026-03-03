@@ -16,6 +16,7 @@
 (declare-function ewwm-ipc-send "ewwm-ipc")
 (declare-function ewwm-ipc-send-sync "ewwm-ipc")
 (declare-function ewwm-ipc-connected-p "ewwm-ipc")
+(declare-function ewwm-ipc-register-events "ewwm-ipc")
 
 ;; ── Customization ────────────────────────────────────────────
 
@@ -207,14 +208,10 @@ Synchronizes local state with compositor timeout."
 (defun ewwm-vr-secure-input--register-events ()
   "Register secure input event handlers with IPC event dispatch.
 Idempotent: will not duplicate handlers."
-  (when (boundp 'ewwm-ipc--event-handlers)
-    (let ((handlers
-           '((:secure-input-entered         . ewwm-vr-secure-input--on-entered)
-             (:secure-input-exited          . ewwm-vr-secure-input--on-exited)
-             (:secure-input-auto-exit-timeout . ewwm-vr-secure-input--on-timeout))))
-      (dolist (handler handlers)
-        (unless (assq (car handler) ewwm-ipc--event-handlers)
-          (push handler ewwm-ipc--event-handlers))))))
+  (ewwm-ipc-register-events
+   '((:secure-input-entered         . ewwm-vr-secure-input--on-entered)
+     (:secure-input-exited          . ewwm-vr-secure-input--on-exited)
+     (:secure-input-auto-exit-timeout . ewwm-vr-secure-input--on-timeout))))
 
 ;; ── Interactive commands ────────────────────────────────────
 

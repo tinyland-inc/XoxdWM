@@ -29,6 +29,7 @@
 (declare-function ewwm-ipc-send "ewwm-ipc")
 (declare-function ewwm-ipc-send-sync "ewwm-ipc")
 (declare-function ewwm-ipc-connected-p "ewwm-ipc")
+(declare-function ewwm-ipc-register-events "ewwm-ipc")
 (declare-function ewwm-keepassxc--send-message "ewwm-keepassxc-browser")
 (declare-function ewwm-keepassxc--receive-response "ewwm-keepassxc-browser")
 
@@ -341,14 +342,11 @@ This function is idempotent; calling it multiple times has no effect.
 
 EXPERIMENTAL (Stage 14.10)."
   (unless ewwm-secrets-passkey--events-registered
-    (when (boundp 'ewwm-ipc--event-handlers)
-      (let ((handlers (list (cons :passkey-request
-                                  #'ewwm-secrets-passkey--on-request)
-                            (cons :passkey-response
-                                  #'ewwm-secrets-passkey--on-response))))
-        (dolist (handler handlers)
-          (unless (assq (car handler) ewwm-ipc--event-handlers)
-            (push handler ewwm-ipc--event-handlers)))))
+    (ewwm-ipc-register-events
+     (list (cons :passkey-request
+                 #'ewwm-secrets-passkey--on-request)
+           (cons :passkey-response
+                 #'ewwm-secrets-passkey--on-response)))
     (setq ewwm-secrets-passkey--events-registered t)))
 
 ;; ── Init / teardown ─────────────────────────────────────────

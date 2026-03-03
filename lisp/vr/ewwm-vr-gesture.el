@@ -13,6 +13,7 @@
 
 (declare-function ewwm-ipc-send "ewwm-ipc")
 (declare-function ewwm-ipc-connected-p "ewwm-ipc")
+(declare-function ewwm-ipc-register-events "ewwm-ipc")
 
 ;; ── Customization ────────────────────────────────────────────
 
@@ -195,14 +196,10 @@ Dispatches swipe direction gestures."
 (defun ewwm-vr-gesture--register-events ()
   "Register gesture event handlers with IPC dispatch.
 Idempotent: checks before adding each handler."
-  (when (boundp 'ewwm-ipc--event-handlers)
-    (let ((handlers
-           '((:gesture-started . ewwm-vr-gesture--on-started)
-             (:gesture-swipe   . ewwm-vr-gesture--on-swipe)
-             (:gesture-ended   . ewwm-vr-gesture--on-ended))))
-      (dolist (handler handlers)
-        (unless (assq (car handler) ewwm-ipc--event-handlers)
-          (push handler ewwm-ipc--event-handlers))))))
+  (ewwm-ipc-register-events
+   '((:gesture-started . ewwm-vr-gesture--on-started)
+     (:gesture-swipe   . ewwm-vr-gesture--on-swipe)
+     (:gesture-ended   . ewwm-vr-gesture--on-ended))))
 
 ;; ── Init / teardown ─────────────────────────────────────────
 

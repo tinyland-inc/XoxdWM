@@ -31,7 +31,7 @@ grouped by subsystem.  The match dispatch contains **131 commands** total.
 | `key-grab` | state.rs | ewwm-input | none |
 | `key-ungrab` | state.rs | ewwm-input | none |
 
-### 1.2 VR Core / OpenXR (Week 7)
+### 1.2 VR Core / OpenXR
 
 | Command | Rust module | Elisp module | Hardware |
 |---------|-------------|--------------|----------|
@@ -40,7 +40,7 @@ grouped by subsystem.  The match dispatch contains **131 commands** total.
 | `vr-restart` | openxr_state.rs / stub.rs | ewwm-vr | HMD |
 | `vr-get-frame-timing` | frame_timing.rs | ewwm-vr | HMD |
 
-### 1.3 VR Scene Graph (Week 8)
+### 1.3 VR Scene Graph
 
 | Command | Rust module | Elisp module | Hardware |
 |---------|-------------|--------------|----------|
@@ -52,7 +52,7 @@ grouped by subsystem.  The match dispatch contains **131 commands** total.
 | `vr-scene-focus` | scene.rs | ewwm-vr-scene | GPU |
 | `vr-scene-move` | scene.rs | ewwm-vr-scene | GPU |
 
-### 1.4 VR Display / DRM Lease (Week 9)
+### 1.4 VR Display / DRM Lease
 
 | Command | Rust module | Elisp module | Hardware |
 |---------|-------------|--------------|----------|
@@ -63,7 +63,7 @@ grouped by subsystem.  The match dispatch contains **131 commands** total.
 | `vr-display-auto-detect` | drm_lease.rs | ewwm-vr-display | HMD |
 | `vr-display-list-connectors` | drm_lease.rs | ewwm-vr-display | HMD |
 
-### 1.5 VR Interaction / Pointer (Week 10)
+### 1.5 VR Interaction / Pointer
 
 | Command | Rust module | Elisp module | Hardware |
 |---------|-------------|--------------|----------|
@@ -76,7 +76,7 @@ grouped by subsystem.  The match dispatch contains **131 commands** total.
 | `vr-set-gaze-offset` | vr_interaction.rs | ewwm-vr-input | HMD |
 | `vr-calibrate-confirm` | vr_interaction.rs | ewwm-vr-input | HMD |
 
-### 1.6 Eye Tracking (Week 11)
+### 1.6 Eye Tracking
 
 | Command | Rust module | Elisp module | Hardware |
 |---------|-------------|--------------|----------|
@@ -89,7 +89,7 @@ grouped by subsystem.  The match dispatch contains **131 commands** total.
 | `gaze-simulate` | eye_tracking.rs | ewwm-vr-eye | none |
 | `gaze-health` | eye_tracking.rs | ewwm-vr-eye | eye tracker |
 
-### 1.7 Gaze Focus (Week 12)
+### 1.7 Gaze Focus
 
 | Command | Rust module | Elisp module | Hardware |
 |---------|-------------|--------------|----------|
@@ -101,7 +101,7 @@ grouped by subsystem.  The match dispatch contains **131 commands** total.
 | `gaze-focus-analytics` | gaze_focus.rs | ewwm-vr-eye | eye tracker |
 | `gaze-focus-back` | gaze_focus.rs | ewwm-vr-eye | eye tracker |
 
-### 1.8 Blink / Wink Detection (Week 13)
+### 1.8 Blink / Wink Detection
 
 | Command | Rust module | Elisp module | Hardware |
 |---------|-------------|--------------|----------|
@@ -110,7 +110,7 @@ grouped by subsystem.  The match dispatch contains **131 commands** total.
 | `wink-calibrate-start` | blink_wink.rs | ewwm-vr-wink | eye tracker |
 | `wink-set-confidence` | blink_wink.rs | ewwm-vr-wink | eye tracker |
 
-### 1.9 Gaze Zones (Week 13)
+### 1.9 Gaze Zones
 
 | Command | Rust module | Elisp module | Hardware |
 |---------|-------------|--------------|----------|
@@ -118,7 +118,7 @@ grouped by subsystem.  The match dispatch contains **131 commands** total.
 | `gaze-zone-config` | gaze_zone.rs | ewwm-vr-gaze-zone | eye tracker |
 | `gaze-zone-set-dwell` | gaze_zone.rs | ewwm-vr-gaze-zone | eye tracker |
 
-### 1.10 Eye Fatigue Monitoring (Week 13)
+### 1.10 Eye Fatigue Monitoring
 
 | Command | Rust module | Elisp module | Hardware |
 |---------|-------------|--------------|----------|
@@ -127,7 +127,7 @@ grouped by subsystem.  The match dispatch contains **131 commands** total.
 | `fatigue-metrics` | fatigue.rs | ewwm-vr-fatigue | eye tracker |
 | `fatigue-reset` | fatigue.rs | ewwm-vr-fatigue | eye tracker |
 
-### 1.11 Auto-Type & Secure Input (Week 14)
+### 1.11 Auto-Type & Secure Input
 
 | Command | Rust module | Elisp module | Hardware |
 |---------|-------------|--------------|----------|
@@ -140,7 +140,7 @@ grouped by subsystem.  The match dispatch contains **131 commands** total.
 | `secure-input-status` | secure_input.rs | ewwm-vr-secure-input | none |
 | `gaze-away-monitor` | secure_input.rs | ewwm-secrets-gaze-away | eye tracker |
 
-### 1.12 Headless Backend (Week 16)
+### 1.12 Headless Backend
 
 | Command | Rust module | Elisp module | Hardware |
 |---------|-------------|--------------|----------|
@@ -149,7 +149,7 @@ grouped by subsystem.  The match dispatch contains **131 commands** total.
 | `headless-add-output` | backend/headless.rs | ewwm-headless | none |
 | `headless-remove-output` | backend/headless.rs | ewwm-headless | none |
 
-### 1.13 Gaze Scroll & Link Hints (Week 17)
+### 1.13 Gaze Scroll & Link Hints
 
 | Command | Rust module | Elisp module | Hardware |
 |---------|-------------|--------------|----------|
@@ -161,7 +161,7 @@ grouped by subsystem.  The match dispatch contains **131 commands** total.
 | `link-hints-clear` | link_hints.rs | ewwm-qutebrowser-gaze | eye tracker |
 | `link-hints-status` | link_hints.rs | ewwm-qutebrowser-gaze | eye tracker |
 
-### 1.14 Hand Tracking (Week 18)
+### 1.14 Hand Tracking
 
 | Command | Rust module | Elisp module | Hardware |
 |---------|-------------|--------------|----------|
@@ -171,7 +171,7 @@ grouped by subsystem.  The match dispatch contains **131 commands** total.
 | `hand-tracking-skeleton` | hand_tracking.rs | ewwm-vr-hand | hand tracker |
 | `hand-tracking-distance` | hand_tracking.rs | ewwm-vr-hand | hand tracker |
 
-### 1.15 Gesture Recognition (Week 18)
+### 1.15 Gesture Recognition
 
 | Command | Rust module | Elisp module | Hardware |
 |---------|-------------|--------------|----------|
@@ -181,7 +181,7 @@ grouped by subsystem.  The match dispatch contains **131 commands** total.
 | `gesture-unbind` | gesture.rs | ewwm-vr-gesture | hand tracker |
 | `gesture-bindings` | gesture.rs | ewwm-vr-gesture | hand tracker |
 
-### 1.16 Virtual Keyboard (Week 18)
+### 1.16 Virtual Keyboard
 
 | Command | Rust module | Elisp module | Hardware |
 |---------|-------------|--------------|----------|
@@ -191,7 +191,7 @@ grouped by subsystem.  The match dispatch contains **131 commands** total.
 | `keyboard-layout` | virtual_keyboard.rs | ewwm-vr-keyboard | hand tracker |
 | `keyboard-status` | virtual_keyboard.rs | ewwm-vr-keyboard | hand tracker |
 
-### 1.17 BCI Core (Week 19)
+### 1.17 BCI Core
 
 | Command | Rust module | Elisp module | Hardware |
 |---------|-------------|--------------|----------|
@@ -205,7 +205,7 @@ grouped by subsystem.  The match dispatch contains **131 commands** total.
 | `bci-data-list` | bci_state.rs | ewwm-bci-core | none |
 | `bci-data-delete` | bci_state.rs | ewwm-bci-core | none |
 
-### 1.18 BCI Attention (Week 19)
+### 1.18 BCI Attention
 
 | Command | Rust module | Elisp module | Hardware |
 |---------|-------------|--------------|----------|
@@ -214,7 +214,7 @@ grouped by subsystem.  The match dispatch contains **131 commands** total.
 | `bci-attention-calibrate-start` | attention.rs | ewwm-bci-attention | EEG headset |
 | `bci-attention-calibrate-finish` | attention.rs | ewwm-bci-attention | EEG headset |
 
-### 1.19 BCI SSVEP (Week 19)
+### 1.19 BCI SSVEP
 
 | Command | Rust module | Elisp module | Hardware |
 |---------|-------------|--------------|----------|
@@ -223,7 +223,7 @@ grouped by subsystem.  The match dispatch contains **131 commands** total.
 | `bci-ssvep-start` | ssvep.rs | ewwm-bci-ssvep | EEG headset |
 | `bci-ssvep-stop` | ssvep.rs | ewwm-bci-ssvep | EEG headset |
 
-### 1.20 BCI P300 (Week 19)
+### 1.20 BCI P300
 
 | Command | Rust module | Elisp module | Hardware |
 |---------|-------------|--------------|----------|
@@ -232,7 +232,7 @@ grouped by subsystem.  The match dispatch contains **131 commands** total.
 | `bci-p300-start` | p300.rs | ewwm-bci-p300 | EEG headset |
 | `bci-p300-stop` | p300.rs | ewwm-bci-p300 | EEG headset |
 
-### 1.21 BCI Motor Imagery (Week 19)
+### 1.21 BCI Motor Imagery
 
 | Command | Rust module | Elisp module | Hardware |
 |---------|-------------|--------------|----------|
@@ -241,7 +241,7 @@ grouped by subsystem.  The match dispatch contains **131 commands** total.
 | `bci-mi-calibrate-start` | motor_imagery.rs | ewwm-bci-mi | EEG headset |
 | `bci-mi-calibrate-finish` | motor_imagery.rs | ewwm-bci-mi | EEG headset |
 
-### 1.22 BCI EEG Fatigue (Week 19)
+### 1.22 BCI EEG Fatigue
 
 | Command | Rust module | Elisp module | Hardware |
 |---------|-------------|--------------|----------|

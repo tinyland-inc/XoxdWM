@@ -15,6 +15,7 @@
 (declare-function ewwm-ipc-send "ewwm-ipc")
 (declare-function ewwm-ipc-send-sync "ewwm-ipc")
 (declare-function ewwm-ipc-connected-p "ewwm-ipc")
+(declare-function ewwm-ipc-register-events "ewwm-ipc")
 
 ;; ── Customization ────────────────────────────────────────────
 
@@ -228,14 +229,10 @@ SPACE is a symbol: `local', `stage', or `view'."
 
 (defun ewwm-vr--register-events ()
   "Register VR event handlers with the IPC event dispatch."
-  (when (boundp 'ewwm-ipc--event-handlers)
-    (let ((vr-handlers
-           '((:vr-session-state    . ewwm-vr--on-session-state)
-             (:vr-system-discovered . ewwm-vr--on-system-discovered)
-             (:vr-frame-stats       . ewwm-vr--on-frame-stats))))
-      (dolist (handler vr-handlers)
-        (unless (assq (car handler) ewwm-ipc--event-handlers)
-          (push handler ewwm-ipc--event-handlers))))))
+  (ewwm-ipc-register-events
+   '((:vr-session-state    . ewwm-vr--on-session-state)
+     (:vr-system-discovered . ewwm-vr--on-system-discovered)
+     (:vr-frame-stats       . ewwm-vr--on-frame-stats))))
 
 (defun ewwm-vr-init ()
   "Initialize the VR subsystem in Emacs.

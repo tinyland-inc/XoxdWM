@@ -15,6 +15,7 @@
 (declare-function ewwm-ipc-send "ewwm-ipc")
 (declare-function ewwm-ipc-send-sync "ewwm-ipc")
 (declare-function ewwm-ipc-connected-p "ewwm-ipc")
+(declare-function ewwm-ipc-register-events "ewwm-ipc")
 
 ;; ── Customization ────────────────────────────────────────────
 
@@ -351,16 +352,12 @@ Shows connection state and streaming indicator."
 (defun ewwm-bci--register-events ()
   "Register BCI event handlers with IPC dispatch.
 Idempotent: checks before adding each handler."
-  (when (boundp 'ewwm-ipc--event-handlers)
-    (let ((handlers
-           '((:bci-connected    . ewwm-bci--on-bci-connected)
-             (:bci-disconnected . ewwm-bci--on-bci-disconnected)
-             (:bci-quality      . ewwm-bci--on-bci-quality)
-             (:bci-error        . ewwm-bci--on-bci-error)
-             (:bci-frame        . ewwm-bci--on-bci-frame))))
-      (dolist (handler handlers)
-        (unless (assq (car handler) ewwm-ipc--event-handlers)
-          (push handler ewwm-ipc--event-handlers))))))
+  (ewwm-ipc-register-events
+   '((:bci-connected    . ewwm-bci--on-bci-connected)
+     (:bci-disconnected . ewwm-bci--on-bci-disconnected)
+     (:bci-quality      . ewwm-bci--on-bci-quality)
+     (:bci-error        . ewwm-bci--on-bci-error)
+     (:bci-frame        . ewwm-bci--on-bci-frame))))
 
 ;; ── Init / teardown ─────────────────────────────────────────
 

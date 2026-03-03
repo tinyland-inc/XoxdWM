@@ -13,6 +13,7 @@
 
 (declare-function ewwm-ipc-send "ewwm-ipc")
 (declare-function ewwm-ipc-connected-p "ewwm-ipc")
+(declare-function ewwm-ipc-register-events "ewwm-ipc")
 
 ;; ── Customization ────────────────────────────────────────────
 
@@ -216,13 +217,9 @@ Returns nil when disabled or level is normal."
 (defun ewwm-vr-fatigue--register-events ()
   "Register fatigue event handlers with IPC event dispatch.
 Idempotent: will not duplicate handlers."
-  (when (boundp 'ewwm-ipc--event-handlers)
-    (let ((handlers
-           '((:fatigue-alert   . ewwm-vr-fatigue--on-fatigue-alert)
-             (:fatigue-metrics  . ewwm-vr-fatigue--on-fatigue-metrics))))
-      (dolist (handler handlers)
-        (unless (assq (car handler) ewwm-ipc--event-handlers)
-          (push handler ewwm-ipc--event-handlers))))))
+  (ewwm-ipc-register-events
+   '((:fatigue-alert   . ewwm-vr-fatigue--on-fatigue-alert)
+     (:fatigue-metrics  . ewwm-vr-fatigue--on-fatigue-metrics))))
 
 ;; ── Minor mode ─────────────────────────────────────────────────
 

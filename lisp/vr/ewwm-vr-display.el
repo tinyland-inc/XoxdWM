@@ -15,6 +15,7 @@
 (declare-function ewwm-ipc-send "ewwm-ipc")
 (declare-function ewwm-ipc-send-sync "ewwm-ipc")
 (declare-function ewwm-ipc-connected-p "ewwm-ipc")
+(declare-function ewwm-ipc-register-events "ewwm-ipc")
 
 ;; ── Customization ────────────────────────────────────────────
 
@@ -217,14 +218,10 @@ MODE is a symbol: `headset', `preview', `headless', or `off'."
 
 (defun ewwm-vr-display--register-events ()
   "Register VR display event handlers with IPC event dispatch."
-  (when (boundp 'ewwm-ipc--event-handlers)
-    (let ((handlers
-           '((:vr-display-mode-changed . ewwm-vr-display--on-mode-changed)
-             (:vr-display-hotplug      . ewwm-vr-display--on-hotplug)
-             (:vr-display-hmd-selected . ewwm-vr-display--on-hmd-selected))))
-      (dolist (handler handlers)
-        (unless (assq (car handler) ewwm-ipc--event-handlers)
-          (push handler ewwm-ipc--event-handlers))))))
+  (ewwm-ipc-register-events
+   '((:vr-display-mode-changed . ewwm-vr-display--on-mode-changed)
+     (:vr-display-hotplug      . ewwm-vr-display--on-hotplug)
+     (:vr-display-hmd-selected . ewwm-vr-display--on-hmd-selected))))
 
 ;; ── Init / teardown ─────────────────────────────────────────
 

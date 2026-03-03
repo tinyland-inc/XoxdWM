@@ -15,6 +15,7 @@
 (declare-function ewwm-ipc-send "ewwm-ipc")
 (declare-function ewwm-ipc-send-sync "ewwm-ipc")
 (declare-function ewwm-ipc-connected-p "ewwm-ipc")
+(declare-function ewwm-ipc-register-events "ewwm-ipc")
 
 ;; ── Customization ────────────────────────────────────────────
 
@@ -308,16 +309,12 @@ MODE is a symbol: `none', `lazy', `sticky', or `locked'."
 
 (defun ewwm-vr-input--register-events ()
   "Register VR input event handlers with IPC event dispatch."
-  (when (boundp 'ewwm-ipc--event-handlers)
-    (let ((handlers
-           '((:vr-pointer          . ewwm-vr-input--on-pointer)
-             (:vr-focus-changed    . ewwm-vr-input--on-focus-changed)
-             (:vr-click            . ewwm-vr-input--on-click)
-             (:vr-grab-started     . ewwm-vr-input--on-grab-started)
-             (:vr-grab-ended       . ewwm-vr-input--on-grab-ended))))
-      (dolist (handler handlers)
-        (unless (assq (car handler) ewwm-ipc--event-handlers)
-          (push handler ewwm-ipc--event-handlers))))))
+  (ewwm-ipc-register-events
+   '((:vr-pointer          . ewwm-vr-input--on-pointer)
+     (:vr-focus-changed    . ewwm-vr-input--on-focus-changed)
+     (:vr-click            . ewwm-vr-input--on-click)
+     (:vr-grab-started     . ewwm-vr-input--on-grab-started)
+     (:vr-grab-ended       . ewwm-vr-input--on-grab-ended))))
 
 ;; ── Minor mode ───────────────────────────────────────────────
 

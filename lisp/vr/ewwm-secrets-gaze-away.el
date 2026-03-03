@@ -17,6 +17,7 @@
 (declare-function ewwm-ipc-send "ewwm-ipc")
 (declare-function ewwm-ipc-send-sync "ewwm-ipc")
 (declare-function ewwm-ipc-connected-p "ewwm-ipc")
+(declare-function ewwm-ipc-register-events "ewwm-ipc")
 
 ;; ── Customization ────────────────────────────────────────────
 
@@ -220,15 +221,11 @@ the main gaze update handler."
 (defun ewwm-secrets-gaze-away--register-events ()
   "Register gaze-away event handlers with IPC event dispatch.
 Idempotent: will not duplicate handlers."
-  (when (boundp 'ewwm-ipc--event-handlers)
-    (let ((handlers
-           '((:gaze-update          . ewwm-secrets-gaze-away--on-gaze-update)
-             (:autotype-paused      . ewwm-secrets-gaze-away--on-autotype-paused)
-             (:autotype-resumed     . ewwm-secrets-gaze-away--on-autotype-resumed)
-             (:gaze-target-changed  . ewwm-secrets-gaze-away--on-gaze-target-changed))))
-      (dolist (handler handlers)
-        (unless (assq (car handler) ewwm-ipc--event-handlers)
-          (push handler ewwm-ipc--event-handlers))))))
+  (ewwm-ipc-register-events
+   '((:gaze-update          . ewwm-secrets-gaze-away--on-gaze-update)
+     (:autotype-paused      . ewwm-secrets-gaze-away--on-autotype-paused)
+     (:autotype-resumed     . ewwm-secrets-gaze-away--on-autotype-resumed)
+     (:gaze-target-changed  . ewwm-secrets-gaze-away--on-gaze-target-changed))))
 
 ;; ── Init / teardown ──────────────────────────────────────────
 

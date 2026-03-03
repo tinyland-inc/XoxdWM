@@ -16,6 +16,7 @@
 
 (declare-function ewwm-ipc-send "ewwm-ipc")
 (declare-function ewwm-ipc-connected-p "ewwm-ipc")
+(declare-function ewwm-ipc-register-events "ewwm-ipc")
 (declare-function ewwm-bci-p300-confirm "ewwm-bci-p300")
 
 ;; ── Customization ────────────────────────────────────────────
@@ -355,14 +356,8 @@ CALLBACK is called with (ACTION t) on success or
 (defun ewwm-bci-multimodal--register-events ()
   "Register multimodal event handlers with IPC dispatch.
 Idempotent: checks before adding each handler."
-  (when (boundp 'ewwm-ipc--event-handlers)
-    (let ((handlers
-           '((:bci-multimodal
-              . ewwm-bci-multimodal--on-bci-multimodal))))
-      (dolist (handler handlers)
-        (unless (assq (car handler)
-                      ewwm-ipc--event-handlers)
-          (push handler ewwm-ipc--event-handlers))))))
+  (ewwm-ipc-register-events
+   '((:bci-multimodal . ewwm-bci-multimodal--on-bci-multimodal))))
 
 ;; ── Init / teardown ─────────────────────────────────────────
 

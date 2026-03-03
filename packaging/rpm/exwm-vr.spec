@@ -17,7 +17,7 @@
 %bcond headless 1
 
 Name:           %{project_name}
-Version:        0.1.0
+Version:        0.5.0
 Release:        1%{?dist}
 Summary:        VR-first transhuman Emacs window manager (Wayland)
 License:        GPL-3.0-or-later
@@ -33,9 +33,11 @@ Source11:       %{selinux_mod}.if
 Source12:       %{selinux_mod}.fc
 
 # Systemd user service units
-Source20:       ewwm-compositor.service
-Source21:       ewwm-monado.service
-Source22:       ewwm-compositor-headless.service
+Source20:       exwm-vr-compositor.service
+Source21:       exwm-vr-monado.service
+Source22:       exwm-vr-emacs.service
+Source23:       exwm-vr-brainflow.service
+Source24:       exwm-vr.target
 
 # udev rules
 Source30:       70-exwm-vr-hmd.rules
@@ -324,15 +326,15 @@ ELISP_EOF
 # --- Systemd user services ---
 %ifnarch s390x
 install -Dpm 0644 %{SOURCE20} \
-    %{buildroot}%{_userunitdir}/ewwm-compositor.service
+    %{buildroot}%{_userunitdir}/exwm-vr-compositor.service
 install -Dpm 0644 %{SOURCE21} \
-    %{buildroot}%{_userunitdir}/ewwm-monado.service
-%endif
-
-# --- Headless systemd service ---
-%if %{with headless}
+    %{buildroot}%{_userunitdir}/exwm-vr-monado.service
 install -Dpm 0644 %{SOURCE22} \
-    %{buildroot}%{_userunitdir}/exwm-vr-compositor-headless.service
+    %{buildroot}%{_userunitdir}/exwm-vr-emacs.service
+install -Dpm 0644 %{SOURCE23} \
+    %{buildroot}%{_userunitdir}/exwm-vr-brainflow.service
+install -Dpm 0644 %{SOURCE24} \
+    %{buildroot}%{_userunitdir}/exwm-vr.target
 %endif
 
 # --- udev rules (skip on s390x -- no HMD hardware) ---
@@ -424,13 +426,17 @@ popd
 
 # --- compositor ---
 %post compositor
-%systemd_user_post ewwm-compositor.service
+%systemd_user_post exwm-vr-compositor.service
+%systemd_user_post exwm-vr-emacs.service
+%systemd_user_post exwm-vr.target
 
 %preun compositor
-%systemd_user_preun ewwm-compositor.service
+%systemd_user_preun exwm-vr-compositor.service
+%systemd_user_preun exwm-vr-emacs.service
+%systemd_user_preun exwm-vr.target
 
 %postun compositor
-%systemd_user_postun_with_restart ewwm-compositor.service
+%systemd_user_postun_with_restart exwm-vr-compositor.service
 
 # --- elisp ---
 %post elisp
@@ -448,16 +454,16 @@ popd
 
 # --- monado ---
 %post monado
-%systemd_user_post ewwm-monado.service
+%systemd_user_post exwm-vr-monado.service
 udevadm control --reload-rules 2>/dev/null || :
 udevadm trigger --subsystem-match=drm 2>/dev/null || :
 udevadm trigger --subsystem-match=usb 2>/dev/null || :
 
 %preun monado
-%systemd_user_preun ewwm-monado.service
+%systemd_user_preun exwm-vr-monado.service
 
 %postun monado
-%systemd_user_postun_with_restart ewwm-monado.service
+%systemd_user_postun_with_restart exwm-vr-monado.service
 
 # --- selinux ---
 %post selinux
@@ -475,13 +481,13 @@ fi
 # --- headless ---
 %if %{with headless}
 %post headless
-%systemd_user_post exwm-vr-compositor-headless.service
+%systemd_user_post exwm-vr-compositor.service
 
 %preun headless
-%systemd_user_preun exwm-vr-compositor-headless.service
+%systemd_user_preun exwm-vr-compositor.service
 
 %postun headless
-%systemd_user_postun_with_restart exwm-vr-compositor-headless.service
+%systemd_user_postun_with_restart exwm-vr-compositor.service
 %endif
 
 # ===========================================================================
@@ -498,7 +504,9 @@ fi
 %files compositor
 %license LICENSE
 %{_bindir}/%{compositor_name}
-%{_userunitdir}/ewwm-compositor.service
+%{_userunitdir}/exwm-vr-compositor.service
+%{_userunitdir}/exwm-vr-emacs.service
+%{_userunitdir}/exwm-vr.target
 %dir %{_localstatedir}/lib/%{project_name}
 %endif
 
@@ -515,7 +523,8 @@ fi
 %ifnarch s390x
 %files monado
 %license LICENSE
-%{_userunitdir}/ewwm-monado.service
+%{_userunitdir}/exwm-vr-monado.service
+%{_userunitdir}/exwm-vr-brainflow.service
 %{_udevrulesdir}/70-exwm-vr-hmd.rules
 %dir %{_sysconfdir}/xdg/openxr
 %dir %{_sysconfdir}/xdg/openxr/1
@@ -543,7 +552,6 @@ fi
 %files headless
 %license LICENSE
 %{_bindir}/%{compositor_name}-headless
-%{_userunitdir}/exwm-vr-compositor-headless.service
 %dir %{_docdir}/%{project_name}-headless
 %{_docdir}/%{project_name}-headless/architecture-notes.md
 %{_docdir}/%{project_name}-headless/gpu-compatibility.md

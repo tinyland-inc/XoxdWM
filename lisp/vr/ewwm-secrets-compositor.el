@@ -16,6 +16,7 @@
 (declare-function ewwm-ipc-send "ewwm-ipc")
 (declare-function ewwm-ipc-send-sync "ewwm-ipc")
 (declare-function ewwm-ipc-connected-p "ewwm-ipc")
+(declare-function ewwm-ipc-register-events "ewwm-ipc")
 
 ;; ── Customization ────────────────────────────────────────────
 
@@ -175,15 +176,11 @@ sent as a single auto-type sequence."
 (defun ewwm-secrets-compositor--register-events ()
   "Register auto-type event handlers with IPC event dispatch.
 Idempotent: checks before adding each handler."
-  (when (boundp 'ewwm-ipc--event-handlers)
-    (let ((handlers
-           '((:autotype-complete  . ewwm-secrets-compositor--on-autotype-complete)
-             (:autotype-paused    . ewwm-secrets-compositor--on-autotype-paused)
-             (:autotype-resumed   . ewwm-secrets-compositor--on-autotype-resumed)
-             (:autotype-error     . ewwm-secrets-compositor--on-autotype-error))))
-      (dolist (handler handlers)
-        (unless (assq (car handler) ewwm-ipc--event-handlers)
-          (push handler ewwm-ipc--event-handlers))))))
+  (ewwm-ipc-register-events
+   '((:autotype-complete  . ewwm-secrets-compositor--on-autotype-complete)
+     (:autotype-paused    . ewwm-secrets-compositor--on-autotype-paused)
+     (:autotype-resumed   . ewwm-secrets-compositor--on-autotype-resumed)
+     (:autotype-error     . ewwm-secrets-compositor--on-autotype-error))))
 
 ;; ── Interactive commands ────────────────────────────────────
 

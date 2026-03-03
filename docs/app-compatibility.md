@@ -62,7 +62,7 @@
 
 ### KeePassXC
 - Auto-type on Wayland: uses `wtype`, `ydotool`, or `xdotool` backend
-- Compositor-level auto-type planned for Week 14
+- Compositor-level auto-type is planned
 - D-Bus Secret Service: `(secrets-list-collections)` from Emacs
 - Browser integration: `keepassxc-proxy` socket
 

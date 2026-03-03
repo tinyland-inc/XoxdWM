@@ -13,6 +13,7 @@
 
 (declare-function ewwm-ipc-send "ewwm-ipc")
 (declare-function ewwm-ipc-connected-p "ewwm-ipc")
+(declare-function ewwm-ipc-register-events "ewwm-ipc")
 
 ;; ── Customization ────────────────────────────────────────────
 
@@ -186,15 +187,11 @@ LAYOUT is a symbol: `qwerty', `dvorak', or `colemak'."
 
 (defun ewwm-vr-keyboard--register-events ()
   "Register keyboard event handlers with IPC dispatch."
-  (when (boundp 'ewwm-ipc--event-handlers)
-    (let ((handlers
-           '((:keyboard-text-input      . ewwm-vr-keyboard--on-text-input)
-             (:keyboard-special-key     . ewwm-vr-keyboard--on-special-key)
-             (:keyboard-visibility      . ewwm-vr-keyboard--on-visibility-changed)
-             (:keyboard-layout-changed  . ewwm-vr-keyboard--on-layout-changed))))
-      (dolist (handler handlers)
-        (unless (assq (car handler) ewwm-ipc--event-handlers)
-          (push handler ewwm-ipc--event-handlers))))))
+  (ewwm-ipc-register-events
+   '((:keyboard-text-input      . ewwm-vr-keyboard--on-text-input)
+     (:keyboard-special-key     . ewwm-vr-keyboard--on-special-key)
+     (:keyboard-visibility      . ewwm-vr-keyboard--on-visibility-changed)
+     (:keyboard-layout-changed  . ewwm-vr-keyboard--on-layout-changed))))
 
 ;; ── Init / teardown ─────────────────────────────────────────
 

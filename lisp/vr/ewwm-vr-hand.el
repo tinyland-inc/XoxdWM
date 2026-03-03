@@ -14,6 +14,7 @@
 (declare-function ewwm-ipc-send "ewwm-ipc")
 (declare-function ewwm-ipc-send-sync "ewwm-ipc")
 (declare-function ewwm-ipc-connected-p "ewwm-ipc")
+(declare-function ewwm-ipc-register-events "ewwm-ipc")
 
 ;; ── Customization ────────────────────────────────────────────
 
@@ -186,14 +187,10 @@ or \" [H:-]\" when none tracked.  Returns nil when disabled."
 (defun ewwm-vr-hand--register-events ()
   "Register hand tracking event handlers with IPC dispatch.
 Idempotent: checks before adding each handler."
-  (when (boundp 'ewwm-ipc--event-handlers)
-    (let ((handlers
-           '((:hand-tracking-started . ewwm-vr-hand--on-tracking-started)
-             (:hand-tracking-lost    . ewwm-vr-hand--on-tracking-lost)
-             (:hand-confidence       . ewwm-vr-hand--on-confidence-update))))
-      (dolist (handler handlers)
-        (unless (assq (car handler) ewwm-ipc--event-handlers)
-          (push handler ewwm-ipc--event-handlers))))))
+  (ewwm-ipc-register-events
+   '((:hand-tracking-started . ewwm-vr-hand--on-tracking-started)
+     (:hand-tracking-lost    . ewwm-vr-hand--on-tracking-lost)
+     (:hand-confidence       . ewwm-vr-hand--on-confidence-update))))
 
 ;; ── Minor mode ───────────────────────────────────────────────
 

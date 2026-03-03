@@ -269,7 +269,7 @@ Release a previously registered key grab.
 (:type :key-ungrab :id 15 :key "s-r")
 ```
 
-#### `:autotype` (stub, Week 14)
+#### `:autotype` (stub)
 
 Inject keystrokes into a surface.
 
@@ -277,7 +277,7 @@ Inject keystrokes into a surface.
 (:type :autotype :id 16 :surface-id 1 :text "password123")
 ```
 
-### VR (stubs, Week 7+)
+### VR (stubs)
 
 #### `:vr-status`
 
@@ -298,7 +298,7 @@ Set 3D position of a surface in VR space.
  :rotation (:yaw 0.0 :pitch 0.0 :roll 0.0))
 ```
 
-#### `:gaze-data` (stub, Week 11+)
+#### `:gaze-data` (stub)
 
 Query current gaze coordinates.
 

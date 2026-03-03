@@ -15,6 +15,7 @@
 
 (declare-function ewwm-ipc-send "ewwm-ipc")
 (declare-function ewwm-ipc-connected-p "ewwm-ipc")
+(declare-function ewwm-ipc-register-events "ewwm-ipc")
 (declare-function ewwm-workspace-switch "ewwm-workspace")
 
 ;; ── Customization ────────────────────────────────────────────
@@ -187,13 +188,8 @@ Starts and stops SSVEP stimulus and classification."
 (defun ewwm-bci-ssvep--register-events ()
   "Register SSVEP event handlers with IPC dispatch.
 Idempotent: checks before adding each handler."
-  (when (boundp 'ewwm-ipc--event-handlers)
-    (let ((handlers
-           '((:bci-ssvep . ewwm-bci-ssvep--on-bci-ssvep))))
-      (dolist (handler handlers)
-        (unless (assq (car handler)
-                      ewwm-ipc--event-handlers)
-          (push handler ewwm-ipc--event-handlers))))))
+  (ewwm-ipc-register-events
+   '((:bci-ssvep . ewwm-bci-ssvep--on-bci-ssvep))))
 
 ;; ── Init / teardown ─────────────────────────────────────────
 

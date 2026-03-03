@@ -15,6 +15,7 @@
 (declare-function ewwm-ipc-send "ewwm-ipc")
 (declare-function ewwm-ipc-send-sync "ewwm-ipc")
 (declare-function ewwm-ipc-connected-p "ewwm-ipc")
+(declare-function ewwm-ipc-register-events "ewwm-ipc")
 
 ;; ── Customization ────────────────────────────────────────────
 
@@ -370,14 +371,10 @@ if no recent wink."
 (defun ewwm-vr-wink--register-events ()
   "Register wink event handlers with IPC event dispatch.
 Idempotent: checks before adding each handler."
-  (when (boundp 'ewwm-ipc--event-handlers)
-    (let ((handlers
-           '((:blink                    . ewwm-vr-wink--on-blink)
-             (:wink                     . ewwm-vr-wink--on-wink)
-             (:wink-calibration-result  . ewwm-vr-wink--on-wink-calibration))))
-      (dolist (handler handlers)
-        (unless (assq (car handler) ewwm-ipc--event-handlers)
-          (push handler ewwm-ipc--event-handlers))))))
+  (ewwm-ipc-register-events
+   '((:blink                    . ewwm-vr-wink--on-blink)
+     (:wink                     . ewwm-vr-wink--on-wink)
+     (:wink-calibration-result  . ewwm-vr-wink--on-wink-calibration))))
 
 ;; ── Minor mode ───────────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 # EXWM Module Classification: Keep / Transform / Drop
 
-Based on Week 1 EXWM codebase analysis (docs/exwm-analysis.org).
+Based on EXWM codebase analysis (docs/exwm-analysis.org).
 
 ## Summary
 
@@ -69,7 +69,7 @@ Based on Week 1 EXWM codebase analysis (docs/exwm-analysis.org).
 
 ### exwm-xim.el (794 lines)
 - **Why drop:** X Input Method protocol is entirely X11. Wayland uses `zwp_text_input_v3` protocol, handled natively by the compositor and client toolkits (GTK4, Qt6).
-- **VR consideration:** VR text input will use a custom virtual keyboard rendered in the VR scene (Week 18).
+- **VR consideration:** VR text input uses a custom virtual keyboard rendered in the VR scene.
 
 ### exwm-systemtray.el (702 lines)
 - **Why drop:** X11 system tray (freedesktop.org spec) has no direct Wayland equivalent. Status notifications in Wayland use `ext-transient-seat` or compositor-specific approaches.
@@ -83,4 +83,4 @@ Based on Week 1 EXWM codebase analysis (docs/exwm-analysis.org).
 - **Why drop:** XSETTINGS is an X11 protocol for theme/DPI propagation. Wayland clients get DPI from `wl_output.scale` and themes from toolkit settings.
 
 ### exwm-background.el (206 lines)
-- **Why drop:** Sets the X11 root window background. Wayland has no root window concept. VR background is a 3D environment (Week 8, stage 8.10).
+- **Why drop:** Sets the X11 root window background. Wayland has no root window concept. VR background is a 3D environment rendered by the compositor.

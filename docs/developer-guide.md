@@ -810,8 +810,7 @@ The project currently has 63 ERT test files in `test/`:
 - **Infrastructure**: `ewwm-environment-test.el`,
   `ewwm-headless-test.el`, `compositor-test.el`,
   `ewwm-benchmark-test.el`
-- **Integration**: `week1-integration-test.el` through
-  `week19-integration-test.el`
+- **Integration**: feature integration test suites (one per subsystem)
 - **E2E**: `e2e-flat-desktop-test.el`, `e2e-eye-tracking-test.el`,
   `e2e-bci-mode-test.el`, `e2e-vr-mode-test.el`,
   `e2e-full-stack-test.el`

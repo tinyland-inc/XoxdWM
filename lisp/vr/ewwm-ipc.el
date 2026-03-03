@@ -472,5 +472,15 @@ Updates layout usable area when layer-shell exclusive zones change."
                        "  p50=%.2fms p95=%.2fms p99=%.2fms")
                count min-t max-t mean-t p50 p95 p99))))
 
+;; ── Event registration helper ─────────────────────────────
+
+(defun ewwm-ipc-register-events (handlers)
+  "Register HANDLERS alist with IPC dispatch.  Idempotent.
+Each element of HANDLERS is (EVENT-KEY . HANDLER-FN)."
+  (when (boundp 'ewwm-ipc--event-handlers)
+    (dolist (h handlers)
+      (unless (assq (car h) ewwm-ipc--event-handlers)
+        (push h ewwm-ipc--event-handlers)))))
+
 (provide 'ewwm-ipc)
 ;;; ewwm-ipc.el ends here

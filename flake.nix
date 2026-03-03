@@ -31,6 +31,23 @@
     let
       version = "0.5.0";
 
+      # Shared helper: build the Wayland/DRM library list for any pkgs set
+      # (used by both the per-system block and the cross-compilation blocks)
+      mkWaylandLibs = pkgs: with pkgs; [
+        wayland
+        wayland-protocols
+        wayland-scanner
+        libdrm
+        libgbm
+        mesa
+        libinput
+        libxkbcommon
+        seatd
+        libffi
+        pixman
+        udev
+      ];
+
       # NixOS modules (not per-system)
       nixosModuleOutputs = {
         nixosModules = {
@@ -75,20 +92,7 @@
             ];
           });
 
-          waylandLibs = with pkgs; [
-            wayland
-            wayland-protocols
-            wayland-scanner
-            libdrm
-            libgbm
-            mesa
-            libinput
-            libxkbcommon
-            seatd
-            libffi
-            pixman
-            udev
-          ];
+          waylandLibs = mkWaylandLibs pkgs;
 
           buildInputs = with pkgs; [
             # Rust
@@ -238,20 +242,7 @@
               rust-overlay.overlays.default
             ];
           };
-          waylandLibs = with pkgs; [
-            wayland
-            wayland-protocols
-            wayland-scanner
-            libdrm
-            libgbm
-            mesa
-            libinput
-            libxkbcommon
-            seatd
-            libffi
-            pixman
-            udev
-          ];
+          waylandLibs = mkWaylandLibs pkgs;
         in {
           compositor = pkgs.rustPlatform.buildRustPackage {
             pname = "ewwm-compositor";
@@ -315,20 +306,7 @@
               rust-overlay.overlays.default
             ];
           };
-          waylandLibs = with pkgs; [
-            wayland
-            wayland-protocols
-            wayland-scanner
-            libdrm
-            libgbm
-            mesa
-            libinput
-            libxkbcommon
-            seatd
-            libffi
-            pixman
-            udev
-          ];
+          waylandLibs = mkWaylandLibs pkgs;
         in {
           compositor-headless = pkgs.rustPlatform.buildRustPackage {
             pname = "ewwm-compositor-headless";

@@ -15,6 +15,7 @@
 
 (declare-function ewwm-ipc-send "ewwm-ipc")
 (declare-function ewwm-ipc-connected-p "ewwm-ipc")
+(declare-function ewwm-ipc-register-events "ewwm-ipc")
 
 ;; ── Customization ────────────────────────────────────────────
 
@@ -326,14 +327,8 @@ or mi-trainer.  Interactively, prompts for selection."
 (defun ewwm-bci-nfb--register-events ()
   "Register NFB event handlers with IPC dispatch.
 Idempotent: checks before adding each handler."
-  (when (boundp 'ewwm-ipc--event-handlers)
-    (let ((handlers
-           '((:bci-nfb-frame
-              . ewwm-bci-nfb--on-bci-nfb-frame))))
-      (dolist (handler handlers)
-        (unless (assq (car handler)
-                      ewwm-ipc--event-handlers)
-          (push handler ewwm-ipc--event-handlers))))))
+  (ewwm-ipc-register-events
+   '((:bci-nfb-frame . ewwm-bci-nfb--on-bci-nfb-frame))))
 
 ;; ── Init / teardown ─────────────────────────────────────────
 
