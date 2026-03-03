@@ -32,6 +32,7 @@ use smithay::{
             wlr_layer::WlrLayerShellState,
             xdg::XdgShellState,
         },
+        pointer_constraints::PointerConstraintsState,
         shm::ShmState,
         xdg_activation::XdgActivationState,
     },
@@ -47,6 +48,8 @@ use tracing::info;
 use crate::autotype::AutoTypeManager;
 use crate::clock::{Clock, SystemClock};
 use crate::handlers::dpms::DpmsState;
+use crate::handlers::output_management::OutputManagementState;
+use crate::handlers::screencopy::ScreencopyState;
 use crate::ipc::IpcServer;
 use crate::secure_input::SecureInputState;
 use crate::vr::VrState;
@@ -201,6 +204,15 @@ pub struct EwwmState {
     // DPMS output power state
     pub dpms_state: DpmsState,
 
+    // Screencopy (wlr-screencopy-unstable-v1)
+    pub screencopy_state: ScreencopyState,
+
+    // Output management (wlr-output-management-unstable-v1)
+    pub output_management_state: OutputManagementState,
+
+    // Pointer constraints (pointer-constraints-unstable-v1)
+    pub pointer_constraints_state: PointerConstraintsState,
+
     // Focus tracking
     pub focused_surface: Option<u64>,
 
@@ -271,11 +283,15 @@ impl EwwmState {
         // XWayland shell protocol (for surface serial matching)
         let xwayland_shell_state = XWaylandShellState::new::<Self>(&display_handle);
 
+        // Pointer constraints (pointer-constraints-unstable-v1)
+        let pointer_constraints_state =
+            PointerConstraintsState::new::<Self>(&display_handle);
+
         let seat = seat_state.new_wl_seat(&display_handle, "ewwm-seat");
 
         info!("EwwmState initialized (layer-shell, foreign-toplevel, xwayland-shell, \
                session-lock, idle-notify, idle-inhibit, primary-selection, dmabuf, \
-               cursor-shape, xdg-activation)");
+               cursor-shape, xdg-activation, pointer-constraints)");
 
         let ipc_socket_path = IpcServer::default_socket_path();
 
@@ -318,6 +334,9 @@ impl EwwmState {
             headless_width: 1920,
             headless_height: 1080,
             dpms_state: DpmsState::default(),
+            screencopy_state: ScreencopyState::new(),
+            output_management_state: OutputManagementState::new(),
+            pointer_constraints_state,
             focused_surface: None,
             cursor_status: CursorImageStatus::Default,
             running: true,

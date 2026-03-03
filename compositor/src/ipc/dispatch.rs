@@ -179,6 +179,13 @@ pub fn handle_message(state: &mut EwwmState, client_id: u64, raw: &str) -> Optio
         // DPMS output power
         Some("dpms-get") => handle_dpms_get(state, msg_id),
         Some("dpms-set") => handle_dpms_set(state, msg_id, &value),
+        // Screencopy (wlr-screencopy-unstable-v1)
+        Some("screencopy-status") => handle_screencopy_status(state, msg_id),
+        // Output management (wlr-output-management-unstable-v1)
+        Some("output-list") => handle_output_list(state, msg_id),
+        Some("output-configure") => handle_output_configure(state, msg_id, &value),
+        // Pointer constraints (pointer-constraints-unstable-v1)
+        Some("pointer-constraints-status") => handle_pointer_constraints_status(state, msg_id),
         // IPC recording (v0.2.0)
         Some("ipc-record-start") => handle_ipc_record_start(state, msg_id, &value),
         Some("ipc-record-stop") => handle_ipc_record_stop(state, msg_id),
@@ -1694,6 +1701,131 @@ fn handle_dpms_set(
             &format!("invalid DPMS state: {} (use on/standby/suspend/off)", state_str),
         )),
     }
+}
+
+// ── Screencopy handlers ────────────────────────────────────
+
+fn handle_screencopy_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let count = state.screencopy_state.get_active_count();
+    let frames: Vec<String> = state
+        .screencopy_state
+        .active_frames
+        .iter()
+        .map(|f| f.to_string())
+        .collect();
+    let frames_sexp = if frames.is_empty() {
+        "nil".to_string()
+    } else {
+        format!("({})", frames.join(" "))
+    };
+    Some(format!(
+        "(:type :response :id {} :status :ok :active-count {} :frame-counter {} :frames {})",
+        msg_id,
+        count,
+        state.screencopy_state.frame_counter,
+        frames_sexp,
+    ))
+}
+
+// ── Output management handlers ─────────────────────────────
+
+fn handle_output_list(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let configs: Vec<String> = state
+        .output_management_state
+        .get_configurations()
+        .iter()
+        .map(|c| c.to_sexp())
+        .collect();
+    let list_sexp = if configs.is_empty() {
+        "nil".to_string()
+    } else {
+        format!("({})", configs.join(" "))
+    };
+    Some(format!(
+        "(:type :response :id {} :status :ok :serial {} :outputs {})",
+        msg_id,
+        state.output_management_state.serial,
+        list_sexp,
+    ))
+}
+
+fn handle_output_configure(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    use crate::handlers::output_management::{OutputConfig, OutputTransform};
+
+    let name = match get_string(value, "name") {
+        Some(n) => n,
+        None => return Some(error_response(msg_id, "missing :name field")),
+    };
+
+    let test_only = get_bool(value, "test-only").unwrap_or(false);
+
+    // Build config from IPC values, defaulting to existing config if present.
+    let base = state
+        .output_management_state
+        .configs
+        .iter()
+        .find(|c| c.name == name)
+        .cloned()
+        .unwrap_or_else(|| OutputConfig::new(name.clone()));
+
+    let config = OutputConfig {
+        name,
+        enabled: get_bool(value, "enabled").unwrap_or(base.enabled),
+        x: get_int(value, "x").map(|v| v as i32).unwrap_or(base.x),
+        y: get_int(value, "y").map(|v| v as i32).unwrap_or(base.y),
+        width: get_int(value, "width").map(|v| v as i32).unwrap_or(base.width),
+        height: get_int(value, "height").map(|v| v as i32).unwrap_or(base.height),
+        refresh: get_int(value, "refresh").map(|v| v as i32).unwrap_or(base.refresh),
+        scale: get_float(value, "scale").unwrap_or(base.scale),
+        transform: get_string(value, "transform")
+            .and_then(|s| OutputTransform::from_str_ipc(&s))
+            .unwrap_or(base.transform),
+    };
+
+    if test_only {
+        match state.output_management_state.test_config(&config) {
+            Ok(serial) => Some(format!(
+                "(:type :response :id {} :status :ok :serial {} :test t)",
+                msg_id, serial,
+            )),
+            Err(e) => Some(error_response(msg_id, &e)),
+        }
+    } else {
+        match state.output_management_state.apply_config(config) {
+            Ok(serial) => {
+                // Notify Emacs of the configuration change.
+                let event = format_event(
+                    "output-configured",
+                    &[("serial", &serial.to_string())],
+                );
+                IpcServer::broadcast_event(state, &event);
+
+                Some(format!(
+                    "(:type :response :id {} :status :ok :serial {})",
+                    msg_id, serial,
+                ))
+            }
+            Err(e) => Some(error_response(msg_id, &e)),
+        }
+    }
+}
+
+// ── Pointer constraints handlers ───────────────────────────
+
+fn handle_pointer_constraints_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let active = if state.pointer_constraint_active() {
+        "t"
+    } else {
+        "nil"
+    };
+    Some(format!(
+        "(:type :response :id {} :status :ok :constraint-active {})",
+        msg_id, active,
+    ))
 }
 
 // ── Gaze scroll handlers ───────────────────────────────────
