@@ -5,12 +5,40 @@
 
 set -euo pipefail
 
-# ── Environment ──────────────────────────────────────────────────────
+# ── XDG session identity ─────────────────────────────────────────────
 export XDG_CURRENT_DESKTOP=EXWM-VR
+export XDG_SESSION_DESKTOP=EXWM-VR
 export XDG_SESSION_TYPE=wayland
-export WAYLAND_DISPLAY=wayland-1
+export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}"
 
-# Optional: point the OpenXR loader at Monado if the manifest exists.
+# ── Wayland toolkit hints ────────────────────────────────────────────
+# These ensure apps use Wayland natively instead of XWayland fallback.
+export QT_QPA_PLATFORM=wayland
+export SDL_VIDEODRIVER=wayland
+export MOZ_ENABLE_WAYLAND=1
+export _JAVA_AWT_WM_NONREPARENTING=1
+export CLUTTER_BACKEND=wayland
+export ECORE_EVAS_ENGINE=wayland-egl
+export ELM_ENGINE=wayland_egl
+export GDK_BACKEND=wayland,x11
+
+# ── Cursor ────────────────────────────────────────────────────────────
+export XCURSOR_THEME="${XCURSOR_THEME:-Adwaita}"
+export XCURSOR_SIZE="${XCURSOR_SIZE:-24}"
+
+# ── XDG portal config ────────────────────────────────────────────────
+# Point portal backends at our config (screencopy, file chooser, etc.)
+if [ -f /usr/share/xdg-desktop-portal/exwm-vr-portals.conf ]; then
+    export XDG_DESKTOP_PORTAL_DIR=/usr/share/xdg-desktop-portal
+fi
+
+# ── D-Bus session bus ─────────────────────────────────────────────────
+# Ensure a session bus is running (display managers usually provide one).
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+    eval "$(dbus-launch --sh-syntax --exit-with-session)"
+fi
+
+# ── OpenXR runtime ────────────────────────────────────────────────────
 if [ -f /etc/xdg/openxr/1/active_runtime.json ]; then
     export XR_RUNTIME_JSON=/etc/xdg/openxr/1/active_runtime.json
 fi

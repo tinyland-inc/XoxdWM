@@ -11,6 +11,7 @@ Restart=on-failure
 RestartSec=3
 Environment=WLR_RENDERER=gles2
 Environment=XDG_CURRENT_DESKTOP=EXWM-VR
+Environment=XDG_SESSION_TYPE=wayland
 
 [Install]
 WantedBy=exwm-vr.target
