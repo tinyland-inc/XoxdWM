@@ -1,0 +1,344 @@
+#!/usr/bin/env python3
+"""beyond-power-on — wake Bigscreen Beyond display via HID power-on sequence.
+
+Sends the 5-packet HID initialization sequence that wakes the Beyond's
+display board controller.  Optionally sets brightness and fan speed.
+
+Usage:
+    beyond-power-on                    # power on display
+    beyond-power-on --brightness 70    # power on + set brightness to 70%
+    beyond-power-on --fan 60           # power on + set fan to 60%
+    beyond-power-on --scan             # just scan for Beyond devices
+    beyond-power-on --dry-run          # show what would be sent
+
+No pip dependencies — uses raw ioctl on /dev/hidraw*.
+Protocol reference: compositor/src/vr/beyond_hid.rs
+"""
+
+import argparse
+import ctypes
+import fcntl
+import glob
+import os
+import sys
+import time
+
+# ── Constants ────────────────────────────────────────────────────────
+
+VENDOR_ID = 0x35BD
+PRODUCT_ID_HMD = 0x0101
+PRODUCT_ID_BIGEYE = 0x0202
+PRODUCT_ID_AUDIO = 0x0105
+PRODUCT_ID_DFU = 0x4004
+
+REPORT_SIZE = 65  # 1 byte report ID + 64 bytes payload
+
+# HID command bytes (report ID 0x00)
+CMD_BRIGHTNESS = 0x49  # 'I'
+CMD_FAN_SPEED = 0x46   # 'F'
+CMD_LED_COLOR = 0x4C   # 'L'
+
+# Power-on uses report ID 0x06
+POWER_ON_REPORT_ID = 0x06
+
+# Linux hidraw ioctl numbers
+# HIDIOCSFEATURE(len) = _IOC(_IOC_WRITE|_IOC_READ, 'H', 0x06, len)
+_IOC_WRITE = 1
+_IOC_READ = 2
+_IOC_WR = _IOC_WRITE | _IOC_READ
+
+
+def _ioc(direction, ioc_type, nr, size):
+    return (direction << 30) | (size << 16) | (ord(ioc_type) << 8) | nr
+
+
+HIDIOCSFEATURE = _ioc(_IOC_WR, 'H', 0x06, REPORT_SIZE)
+
+# ── Device Discovery ─────────────────────────────────────────────────
+
+
+def find_beyond_hidraw():
+    """Scan /dev/hidraw* for Bigscreen Beyond HMD (35bd:0101).
+
+    Reads /sys/class/hidraw/hidrawN/device/uevent for HID_ID line.
+    Format: HID_ID=BBBB:VVVVVVVV:PPPPPPPP (bus, vendor, product in hex).
+    """
+    for uevent_path in sorted(glob.glob('/sys/class/hidraw/hidraw*/device/uevent')):
+        try:
+            with open(uevent_path) as f:
+                lines = f.readlines()
+        except (OSError, PermissionError):
+            continue
+
+        hid_id = None
+        hid_name = None
+        hid_uniq = None
+        for line in lines:
+            line = line.strip()
+            if line.startswith('HID_ID='):
+                hid_id = line.split('=', 1)[1]
+            elif line.startswith('HID_NAME='):
+                hid_name = line.split('=', 1)[1]
+            elif line.startswith('HID_UNIQ='):
+                hid_uniq = line.split('=', 1)[1]
+
+        if hid_id is None:
+            continue
+
+        # Parse HID_ID: "0003:000035BD:00000101"
+        parts = hid_id.split(':')
+        if len(parts) != 3:
+            continue
+
+        vendor = int(parts[1], 16)
+        product = int(parts[2], 16)
+
+        # Extract hidraw number from path
+        hidraw_name = uevent_path.split('/')[4]  # hidrawN
+        dev_path = f'/dev/{hidraw_name}'
+
+        if vendor == VENDOR_ID and product == PRODUCT_ID_HMD:
+            return dev_path, hid_name or 'Bigscreen Beyond', hid_uniq or ''
+
+    return None, None, None
+
+
+def scan_all_devices():
+    """List all Bigscreen devices found on hidraw."""
+    print('Scanning for Bigscreen devices...')
+    found = False
+    for uevent_path in sorted(glob.glob('/sys/class/hidraw/hidraw*/device/uevent')):
+        try:
+            with open(uevent_path) as f:
+                lines = f.readlines()
+        except (OSError, PermissionError):
+            continue
+
+        info = {}
+        for line in lines:
+            k, _, v = line.strip().partition('=')
+            info[k] = v
+
+        hid_id = info.get('HID_ID', '')
+        parts = hid_id.split(':')
+        if len(parts) != 3:
+            continue
+
+        vendor = int(parts[1], 16)
+        if vendor != VENDOR_ID:
+            continue
+
+        product = int(parts[2], 16)
+        hidraw_name = uevent_path.split('/')[4]
+        dev_path = f'/dev/{hidraw_name}'
+
+        product_names = {
+            PRODUCT_ID_HMD: 'HMD',
+            PRODUCT_ID_BIGEYE: 'Bigeye (eye tracking)',
+            PRODUCT_ID_AUDIO: 'Audio Strap',
+            PRODUCT_ID_DFU: 'Firmware DFU',
+        }
+        pname = product_names.get(product, f'Unknown (0x{product:04x})')
+        name = info.get('HID_NAME', '?')
+        serial = info.get('HID_UNIQ', '')
+
+        # Check permissions
+        try:
+            perms = oct(os.stat(dev_path).st_mode)[-3:]
+            readable = os.access(dev_path, os.R_OK | os.W_OK)
+        except OSError:
+            perms = '???'
+            readable = False
+
+        access_str = 'OK' if readable else 'NO ACCESS'
+        serial_str = f'  serial={serial}' if serial else ''
+        print(f'  {dev_path}: {name} [{pname}]  mode={perms} {access_str}{serial_str}')
+        found = True
+
+    if not found:
+        print('  No Bigscreen devices found.')
+    return found
+
+
+# ── HID Report Builders ──────────────────────────────────────────────
+
+
+def build_power_on_sequence():
+    """Build the 5-packet display power-on sequence.
+
+    Matches compositor/src/vr/beyond_hid.rs build_power_on_sequence().
+    The device has no explicit HID report IDs — uses implicit ID 0.
+    Byte layout: [0x00 (report_id), 0x00, 0x22, phase, 0x00, ...zeros]
+    """
+    packets = []
+    for phase in [0x00, 0x00, 0x00, 0x01, 0x02]:
+        pkt = bytearray(REPORT_SIZE)
+        pkt[0] = 0x00   # report ID (implicit 0, no IDs in descriptor)
+        pkt[1] = 0x00   # padding
+        pkt[2] = 0x22   # power-on command
+        pkt[3] = phase   # phase (0x00 ×3, then 0x01, 0x02)
+        pkt[4] = 0x00
+        packets.append(pkt)
+    return packets
+
+
+def build_brightness_report(pct):
+    """Build brightness feature report.
+
+    Formula from beyond_hid.rs: device_value = (2.15 * pct + 50) as u16
+    Range: 0x0032 (50) at 0% to 0x010A (266) at 100%.
+    """
+    pct = max(0, min(100, pct))
+    val = int(2.15 * pct + 50.0)
+    val = max(0x0032, min(0x010A, val))
+    report = bytearray(REPORT_SIZE)
+    report[0] = 0x00  # report ID
+    report[1] = CMD_BRIGHTNESS
+    report[2] = (val >> 8) & 0xFF
+    report[3] = val & 0xFF
+    return report
+
+
+def build_fan_report(pct):
+    """Build fan speed feature report. Range: 40-100%."""
+    pct = max(40, min(100, pct))
+    report = bytearray(REPORT_SIZE)
+    report[0] = 0x00  # report ID
+    report[1] = CMD_FAN_SPEED
+    report[2] = pct
+    return report
+
+
+def build_led_report(r, g, b):
+    """Build LED color feature report. RGB 0-255."""
+    report = bytearray(REPORT_SIZE)
+    report[0] = 0x00  # report ID
+    report[1] = CMD_LED_COLOR
+    report[2] = max(0, min(255, r))
+    report[3] = max(0, min(255, g))
+    report[4] = max(0, min(255, b))
+    return report
+
+
+# ── HID I/O ──────────────────────────────────────────────────────────
+
+
+def send_feature_report(fd, data):
+    """Send a HID feature report via ioctl HIDIOCSFEATURE.
+
+    Falls back to write() (OUTPUT report) if ioctl fails with EPIPE,
+    which happens when the device expects output reports instead.
+    """
+    buf = (ctypes.c_uint8 * REPORT_SIZE).from_buffer_copy(bytes(data))
+    try:
+        fcntl.ioctl(fd, HIDIOCSFEATURE, buf)
+    except OSError as e:
+        if e.errno == 32:  # EPIPE — try as output report via write()
+            os.write(fd, bytes(data))
+        else:
+            raise
+
+
+def format_report(data):
+    """Format a report for --dry-run display."""
+    return ' '.join(f'{b:02x}' for b in data[:8]) + ' ...'
+
+
+# ── Main ─────────────────────────────────────────────────────────────
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Wake Bigscreen Beyond display via HID power-on sequence.',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='Protocol ref: compositor/src/vr/beyond_hid.rs')
+    parser.add_argument('--scan', action='store_true',
+                        help='Scan for Beyond devices and exit')
+    parser.add_argument('--brightness', type=int, metavar='PCT',
+                        help='Set brightness (0-100%%)')
+    parser.add_argument('--fan', type=int, metavar='PCT',
+                        help='Set fan speed (40-100%%)')
+    parser.add_argument('--led', type=int, nargs=3, metavar=('R', 'G', 'B'),
+                        help='Set LED color (0-255 each)')
+    parser.add_argument('--device', type=str, metavar='PATH',
+                        help='Override hidraw device path')
+    parser.add_argument('--skip-power-on', action='store_true',
+                        help='Skip the power-on sequence')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='Show what would be sent without opening device')
+    args = parser.parse_args()
+
+    if args.scan:
+        scan_all_devices()
+        return
+
+    # Find device
+    if args.device:
+        dev_path = args.device
+        dev_name = 'manual'
+        dev_serial = ''
+    else:
+        dev_path, dev_name, dev_serial = find_beyond_hidraw()
+        if dev_path is None:
+            print('ERROR: No Bigscreen Beyond HMD found.', file=sys.stderr)
+            print('  Run with --scan to list devices, or --device /dev/hidrawN', file=sys.stderr)
+            sys.exit(1)
+
+    serial_str = f' (serial: {dev_serial})' if dev_serial else ''
+    print(f'Beyond: {dev_path} — {dev_name}{serial_str}')
+
+    # Build command list
+    commands = []
+
+    if not args.skip_power_on:
+        for i, pkt in enumerate(build_power_on_sequence()):
+            commands.append((f'power-on {i + 1}/5', pkt))
+
+    if args.brightness is not None:
+        commands.append((f'brightness {args.brightness}%', build_brightness_report(args.brightness)))
+
+    if args.fan is not None:
+        commands.append((f'fan {args.fan}%', build_fan_report(args.fan)))
+
+    if args.led is not None:
+        r, g, b = args.led
+        commands.append((f'LED ({r},{g},{b})', build_led_report(r, g, b)))
+
+    if not commands:
+        print('Nothing to do (power-on skipped, no brightness/fan/led set).')
+        return
+
+    if args.dry_run:
+        print('Dry run — would send:')
+        for label, data in commands:
+            print(f'  {label}: [{format_report(data)}]')
+        return
+
+    # Send commands
+    try:
+        fd = os.open(dev_path, os.O_RDWR)
+    except PermissionError:
+        print(f'ERROR: Permission denied opening {dev_path}', file=sys.stderr)
+        print(f'  Check udev rules (GROUP="video") and group membership.', file=sys.stderr)
+        sys.exit(1)
+    except OSError as e:
+        print(f'ERROR: Cannot open {dev_path}: {e}', file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        for label, data in commands:
+            try:
+                send_feature_report(fd, data)
+                print(f'  {label}: sent')
+            except OSError as e:
+                print(f'  {label}: FAILED ({e})', file=sys.stderr)
+                sys.exit(1)
+            time.sleep(0.05)  # 50ms between packets
+    finally:
+        os.close(fd)
+
+    print('Done.')
+
+
+if __name__ == '__main__':
+    main()

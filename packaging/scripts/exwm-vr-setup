@@ -9,6 +9,8 @@
 #   verify           Verify display, DRM connectors, USB, permissions
 #   beyond-status    Quick Beyond 2e hardware status
 #   beyond-hid-test  Test HID device access
+#   gpu-tools        Install Vulkan tools + GPU diagnostics
+#   beyond-power-on  Send HID power-on sequence to Beyond display
 #   full-setup       Run prereqs + kernel-upgrade (reboot needed after)
 
 set -euo pipefail
@@ -58,9 +60,19 @@ cmd_prereqs() {
         echo "  ERROR: udev rules not found at $rules_src"
         exit 1
     fi
+    # Non-desktop rule (Beyond EDID quirk workaround)
+    local nd_src="$PROJECT_ROOT/packaging/udev/98-bigscreen-non-desktop.rules"
+    if [ -f "$nd_src" ]; then
+        cp "$nd_src" /etc/udev/rules.d/98-bigscreen-non-desktop.rules
+    elif [ -f /tmp/98-bigscreen-non-desktop.rules ]; then
+        cp /tmp/98-bigscreen-non-desktop.rules /etc/udev/rules.d/98-bigscreen-non-desktop.rules
+    fi
+
     udevadm control --reload-rules
     udevadm trigger
     echo "  Installed: /etc/udev/rules.d/99-exwm-vr.rules"
+    [ -f /etc/udev/rules.d/98-bigscreen-non-desktop.rules ] && \
+        echo "  Installed: /etc/udev/rules.d/98-bigscreen-non-desktop.rules"
     echo
 
     # Firmware check
@@ -126,10 +138,15 @@ cmd_kernel_upgrade() {
     echo "  Default boot: $new_kver"
     echo
 
-    # Non-desktop udev rule
-    cat > /etc/udev/rules.d/98-bigscreen-non-desktop.rules <<'UDEV'
-ACTION=="change", SUBSYSTEM=="drm", ENV{HOTPLUG}=="1", RUN+="/bin/bash -c 'for c in /sys/class/drm/card*-DP-*/; do if [ -f \"$c/edid\" ] && cat \"$c/edid\" 2>/dev/null | strings | grep -q BIG; then echo 1 > \"$c/non_desktop\" 2>/dev/null; fi; done'"
-UDEV
+    # Non-desktop udev rule (copy from repo or /tmp)
+    local nd_src="$PROJECT_ROOT/packaging/udev/98-bigscreen-non-desktop.rules"
+    if [ -f "$nd_src" ]; then
+        cp "$nd_src" /etc/udev/rules.d/98-bigscreen-non-desktop.rules
+    elif [ -f /tmp/98-bigscreen-non-desktop.rules ]; then
+        cp /tmp/98-bigscreen-non-desktop.rules /etc/udev/rules.d/98-bigscreen-non-desktop.rules
+    else
+        echo "  WARNING: 98-bigscreen-non-desktop.rules not found, skipping"
+    fi
     udevadm control --reload-rules
     echo
 
@@ -270,6 +287,48 @@ print('OK')
     done
 }
 
+cmd_gpu_tools() {
+    _need_root
+
+    echo "=== GPU Diagnostic Tools ==="
+    echo
+
+    echo "[1/3] Installing Vulkan tools..."
+    dnf install -y vulkan-tools mesa-vulkan-drivers vulkan-loader 2>&1 | tail -5
+    echo
+
+    echo "[2/3] Installing DRM utilities..."
+    dnf install -y libdrm-utils 2>&1 | tail -5 || \
+        echo "  libdrm-utils not available (optional)"
+    echo
+
+    echo "[3/3] Verifying..."
+    if command -v vulkaninfo >/dev/null 2>&1; then
+        echo "  vulkaninfo: $(command -v vulkaninfo)"
+        vulkaninfo --summary 2>&1 | head -10
+    else
+        echo "  WARNING: vulkaninfo still not available after install"
+    fi
+    echo
+    echo "=== GPU tools installed ==="
+}
+
+cmd_beyond_power_on() {
+    echo "=== Beyond Display Power-On ==="
+    local script
+    if [ -f "$PROJECT_ROOT/packaging/scripts/beyond-power-on" ]; then
+        script="$PROJECT_ROOT/packaging/scripts/beyond-power-on"
+    elif [ -f /tmp/beyond-power-on ]; then
+        script="/tmp/beyond-power-on"
+    elif [ -f "$SCRIPT_DIR/beyond-power-on" ]; then
+        script="$SCRIPT_DIR/beyond-power-on"
+    else
+        echo "ERROR: beyond-power-on script not found"
+        exit 1
+    fi
+    python3 "$script" "$@"
+}
+
 cmd_full_setup() {
     cmd_prereqs
     echo
@@ -287,6 +346,8 @@ usage() {
     echo "  verify           Verify display, DRM, USB, permissions"
     echo "  beyond-status    Quick Beyond 2e status"
     echo "  beyond-hid-test  Test HID device access"
+    echo "  beyond-power-on  Send HID power-on sequence to Beyond display"
+    echo "  gpu-tools        Install Vulkan tools + GPU diagnostics (sudo)"
     echo "  full-setup       Run prereqs + kernel-upgrade (sudo)"
     echo
     echo "Environment:"
@@ -299,6 +360,8 @@ case "${1:-}" in
     verify)         shift; cmd_verify "$@" ;;
     beyond-status)  shift; cmd_beyond_status "$@" ;;
     beyond-hid-test) shift; cmd_beyond_hid_test "$@" ;;
+    beyond-power-on) shift; cmd_beyond_power_on "$@" ;;
+    gpu-tools)      shift; cmd_gpu_tools "$@" ;;
     full-setup)     shift; cmd_full_setup "$@" ;;
     -h|--help|help) usage ;;
     *)
