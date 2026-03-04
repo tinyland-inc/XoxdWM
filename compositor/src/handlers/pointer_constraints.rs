@@ -10,7 +10,7 @@ use smithay::{
     input::pointer::PointerHandle,
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     wayland::pointer_constraints::{
-        with_pointer_constraint, PointerConstraintsHandler, PointerConstraintsState,
+        with_pointer_constraint, PointerConstraintsHandler,
     },
 };
 use tracing::{debug, info};
@@ -19,16 +19,13 @@ use crate::ipc::dispatch::format_event;
 use crate::ipc::IpcServer;
 
 impl PointerConstraintsHandler for EwwmState {
-    fn pointer_constraints_state(&mut self) -> &mut PointerConstraintsState {
-        &mut self.pointer_constraints_state
-    }
-
     fn new_constraint(&mut self, surface: &WlSurface, pointer: &PointerHandle<Self>) {
         // Determine if this is a lock or confine constraint.
         let constraint_type = with_pointer_constraint(surface, pointer, |constraint| {
-            constraint.map(|c| if c.is_active() { "active" } else { "pending" })
+            constraint
+                .map(|c| if c.is_active() { "active" } else { "pending" })
+                .unwrap_or("unknown")
         })
-        .unwrap_or(Some("unknown"))
         .unwrap_or("unknown");
 
         info!(

@@ -95,6 +95,8 @@ impl PrimarySelectionHandler for EwwmState {
     }
 }
 
+impl smithay::wayland::tablet_manager::TabletSeatHandler for EwwmState {}
+
 delegate_seat!(EwwmState);
 delegate_data_device!(EwwmState);
 delegate_output!(EwwmState);

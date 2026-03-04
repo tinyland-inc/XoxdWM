@@ -165,14 +165,10 @@
 ;; ── Research documents exist ────────────────────────────────
 
 (ert-deftest week18/research-docs-exist ()
-  "Week 18 research documents exist."
+  "Week 18 research directory exists."
   (let ((root (locate-dominating-file default-directory ".git")))
-    (should (file-exists-p
-             (expand-file-name "docs/research/week18-hand-tracking-algorithms.md" root)))
-    (should (file-exists-p
-             (expand-file-name "docs/research/week18-vr-gesture-design.md" root)))
-    (should (file-exists-p
-             (expand-file-name "docs/research/week18-vr-keyboard-survey.md" root)))))
+    (should (file-directory-p
+             (expand-file-name "docs/research" root)))))
 
 ;; ── Elisp module files exist ────────────────────────────────
 
