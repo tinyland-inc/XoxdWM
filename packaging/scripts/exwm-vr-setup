@@ -1,0 +1,309 @@
+#!/bin/bash
+# exwm-vr-setup — unified setup entrypoint for EXWM-VR hardware hosts
+#
+# Usage: exwm-vr-setup <command> [options]
+#
+# Commands:
+#   prereqs          Install groups, udev rules, check firmware
+#   kernel-upgrade   Install ELRepo kernel-ml + firmware update
+#   verify           Verify display, DRM connectors, USB, permissions
+#   beyond-status    Quick Beyond 2e hardware status
+#   beyond-hid-test  Test HID device access
+#   full-setup       Run prereqs + kernel-upgrade (reboot needed after)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+# ── Helpers ─────────────────────────────────────────────
+
+_need_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "ERROR: This command requires root. Run with sudo."
+        exit 1
+    fi
+}
+
+_check_user() {
+    local user="${EXWM_USER:-$(logname 2>/dev/null || echo "${SUDO_USER:-$USER}")}"
+    echo "$user"
+}
+
+# ── Commands ────────────────────────────────────────────
+
+cmd_prereqs() {
+    _need_root
+    local user
+    user=$(_check_user)
+
+    echo "=== EXWM-VR Prerequisites ==="
+    echo "  User: $user"
+    echo
+
+    # Groups
+    echo "[1/3] Adding $user to video, render, input groups..."
+    usermod -aG video,render,input "$user"
+    echo "  Done. Groups: $(id "$user")"
+    echo
+
+    # udev rules
+    echo "[2/3] Installing udev rules..."
+    local rules_src="$PROJECT_ROOT/packaging/udev/99-exwm-vr.rules"
+    if [ -f "$rules_src" ]; then
+        cp "$rules_src" /etc/udev/rules.d/99-exwm-vr.rules
+    elif [ -f /tmp/99-exwm-vr.rules ]; then
+        cp /tmp/99-exwm-vr.rules /etc/udev/rules.d/99-exwm-vr.rules
+    else
+        echo "  ERROR: udev rules not found at $rules_src"
+        exit 1
+    fi
+    udevadm control --reload-rules
+    udevadm trigger
+    echo "  Installed: /etc/udev/rules.d/99-exwm-vr.rules"
+    echo
+
+    # Firmware check
+    echo "[3/3] Checking amdgpu firmware..."
+    if ls /lib/firmware/amdgpu/gc_12_0_0* >/dev/null 2>&1; then
+        echo "  Found $(ls /lib/firmware/amdgpu/gc_12_0_0* | wc -l) gc_12_0_0 blobs"
+    else
+        echo "  WARNING: No gc_12_0_0 firmware found"
+    fi
+    echo
+
+    echo "=== Prerequisites installed. Log out/in for groups to take effect. ==="
+}
+
+cmd_kernel_upgrade() {
+    _need_root
+
+    echo "=== Kernel Upgrade (ELRepo kernel-ml) ==="
+    echo "  Current: $(uname -r)"
+    echo
+
+    # ELRepo
+    echo "[1/4] Installing ELRepo..."
+    if rpm -q elrepo-release >/dev/null 2>&1; then
+        echo "  Already installed"
+    else
+        dnf install -y elrepo-release
+    fi
+    echo
+
+    # kernel-ml
+    echo "[2/4] Installing kernel-ml..."
+    dnf --enablerepo=elrepo-kernel install -y \
+        kernel-ml kernel-ml-devel kernel-ml-modules kernel-ml-modules-extra
+    echo
+
+    # Firmware
+    echo "[3/4] Updating amdgpu firmware..."
+    local fw_tmp
+    fw_tmp=$(mktemp -d)
+    git clone --depth 1 --filter=blob:none --sparse \
+        https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git \
+        "$fw_tmp/linux-firmware" 2>&1 | tail -1
+    cd "$fw_tmp/linux-firmware"
+    git sparse-checkout set amdgpu 2>/dev/null || true
+    cp -u amdgpu/* /lib/firmware/amdgpu/ 2>/dev/null || cp amdgpu/* /lib/firmware/amdgpu/
+    cd /
+    rm -rf "$fw_tmp"
+
+    local new_kver
+    new_kver=$(rpm -q kernel-ml --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' | sort -V | tail -1)
+    echo "  Rebuilding initramfs for $new_kver..."
+    dracut --force "/boot/initramfs-${new_kver}.img" "$new_kver"
+    echo
+
+    # GRUB
+    echo "[4/4] Configuring GRUB..."
+    if ! grep -q 'amdgpu.modeset=1' /etc/default/grub; then
+        sed -i 's/GRUB_CMDLINE_LINUX="\(.*\)"/GRUB_CMDLINE_LINUX="\1 amdgpu.modeset=1 amdgpu.dc=1 amdgpu.dcdebugmask=0x10"/' /etc/default/grub
+        grub2-mkconfig -o /boot/grub2/grub.cfg
+    fi
+    grubby --set-default="/boot/vmlinuz-$new_kver"
+    echo "  Default boot: $new_kver"
+    echo
+
+    # Non-desktop udev rule
+    cat > /etc/udev/rules.d/98-bigscreen-non-desktop.rules <<'UDEV'
+ACTION=="change", SUBSYSTEM=="drm", ENV{HOTPLUG}=="1", RUN+="/bin/bash -c 'for c in /sys/class/drm/card*-DP-*/; do if [ -f \"$c/edid\" ] && cat \"$c/edid\" 2>/dev/null | strings | grep -q BIG; then echo 1 > \"$c/non_desktop\" 2>/dev/null; fi; done'"
+UDEV
+    udevadm control --reload-rules
+    echo
+
+    echo "=== Kernel upgrade complete. REBOOT REQUIRED: sudo reboot ==="
+}
+
+cmd_verify() {
+    echo "=== EXWM-VR Display Verification ==="
+    echo
+
+    # Kernel
+    echo "[kernel] $(uname -r)"
+    local kmin
+    kmin=$(uname -r | cut -d. -f2)
+    [ "$kmin" -ge 13 ] 2>/dev/null && echo "  OK (>= 6.13)" || echo "  WARNING (< 6.13)"
+    echo
+
+    # DRM connectors
+    echo "[drm]"
+    local found_beyond=false
+    for conn in /sys/class/drm/card*-*/; do
+        [ -d "$conn" ] || continue
+        local name status nd
+        name=$(basename "$conn")
+        status=$(cat "$conn/status" 2>/dev/null || echo "?")
+        nd=$(cat "$conn/non_desktop" 2>/dev/null || echo "?")
+        echo "  $name: status=$status non_desktop=$nd"
+        if [ "$status" = "connected" ] && [ "$nd" = "1" ]; then
+            found_beyond=true
+        fi
+    done
+    echo
+
+    # USB
+    echo "[usb]"
+    lsusb 2>/dev/null | grep -i "35bd\|bigscreen\|bigeye" || echo "  No Beyond USB devices"
+    echo
+
+    # hidraw
+    echo "[hidraw]"
+    for h in /dev/hidraw*; do
+        [ -c "$h" ] || continue
+        local perms hnum name
+        hnum=$(basename "$h")
+        perms=$(stat -c '%a %U:%G' "$h")
+        name=$(grep HID_NAME "/sys/class/hidraw/$hnum/device/uevent" 2>/dev/null | cut -d= -f2 || echo "?")
+        echo "  $h: $perms ($name)"
+    done
+    echo
+
+    # EDID
+    echo "[edid]"
+    for conn in /sys/class/drm/card*-DP-*/; do
+        [ -d "$conn" ] || continue
+        local name status
+        name=$(basename "$conn")
+        status=$(cat "$conn/status" 2>/dev/null)
+        if [ "$status" = "connected" ] && [ -f "$conn/edid" ]; then
+            local size
+            size=$(xxd "$conn/edid" 2>/dev/null | wc -l)
+            if [ "$size" -gt 0 ]; then
+                echo "  $name: EDID present ($(( size * 16 )) bytes)"
+                strings "$conn/edid" 2>/dev/null | head -3 | sed 's/^/    /'
+            fi
+        fi
+    done
+    echo
+
+    # Modes
+    echo "[modes]"
+    for conn in /sys/class/drm/card*-DP-*/; do
+        [ -d "$conn" ] || continue
+        local name status modes
+        name=$(basename "$conn")
+        status=$(cat "$conn/status" 2>/dev/null)
+        if [ "$status" = "connected" ]; then
+            modes=$(cat "$conn/modes" 2>/dev/null)
+            [ -n "$modes" ] && echo "  $name: $modes" | head -5
+        fi
+    done
+    echo
+
+    if $found_beyond; then
+        echo "PASS: Beyond detected as non-desktop display"
+    else
+        echo "INCOMPLETE: No non-desktop display found"
+        echo "  Check: kernel version, EDID quirk, cable connection"
+    fi
+}
+
+cmd_beyond_status() {
+    echo "=== Beyond 2e Quick Status ==="
+    echo
+    echo "[usb]"
+    lsusb 2>/dev/null | grep -i "35bd\|bigscreen\|bigeye" || echo "  Not detected"
+    echo
+    echo "[drm]"
+    for c in /sys/class/drm/card*-DP-*/; do
+        [ -d "$c" ] || continue
+        local n s nd
+        n=$(basename "$c")
+        s=$(cat "$c/status" 2>/dev/null)
+        nd=$(cat "$c/non_desktop" 2>/dev/null)
+        echo "  $n: status=$s non_desktop=$nd"
+    done
+    echo
+    echo "[hidraw]"
+    for h in /dev/hidraw*; do
+        [ -c "$h" ] || continue
+        local hnum name perms
+        hnum=$(basename "$h")
+        name=$(grep HID_NAME "/sys/class/hidraw/$hnum/device/uevent" 2>/dev/null | cut -d= -f2)
+        [ -z "$name" ] && continue
+        perms=$(stat -c '%a' "$h")
+        echo "  $h: $name (mode=$perms)"
+    done
+}
+
+cmd_beyond_hid_test() {
+    echo "=== Beyond HID Access Test ==="
+    for i in $(seq 0 9); do
+        local path="/dev/hidraw$i"
+        [ -c "$path" ] || continue
+        local name
+        name=$(grep HID_NAME "/sys/class/hidraw/hidraw$i/device/uevent" 2>/dev/null | cut -d= -f2)
+        [ -z "$name" ] && continue
+        echo -n "  $path ($name): "
+        if python3 -c "
+import os
+fd = os.open('$path', os.O_RDWR)
+os.close(fd)
+print('OK')
+" 2>/dev/null; then
+            true
+        else
+            echo "PERMISSION DENIED"
+        fi
+    done
+}
+
+cmd_full_setup() {
+    cmd_prereqs
+    echo
+    cmd_kernel_upgrade
+}
+
+# ── Main ────────────────────────────────────────────────
+
+usage() {
+    echo "Usage: exwm-vr-setup <command>"
+    echo
+    echo "Commands:"
+    echo "  prereqs          Install groups, udev rules, check firmware (sudo)"
+    echo "  kernel-upgrade   Install ELRepo kernel-ml + firmware (sudo)"
+    echo "  verify           Verify display, DRM, USB, permissions"
+    echo "  beyond-status    Quick Beyond 2e status"
+    echo "  beyond-hid-test  Test HID device access"
+    echo "  full-setup       Run prereqs + kernel-upgrade (sudo)"
+    echo
+    echo "Environment:"
+    echo "  EXWM_USER        Override target user (default: \$SUDO_USER or \$USER)"
+}
+
+case "${1:-}" in
+    prereqs)        shift; cmd_prereqs "$@" ;;
+    kernel-upgrade) shift; cmd_kernel_upgrade "$@" ;;
+    verify)         shift; cmd_verify "$@" ;;
+    beyond-status)  shift; cmd_beyond_status "$@" ;;
+    beyond-hid-test) shift; cmd_beyond_hid_test "$@" ;;
+    full-setup)     shift; cmd_full_setup "$@" ;;
+    -h|--help|help) usage ;;
+    *)
+        echo "Unknown command: ${1:-}"
+        usage
+        exit 1
+        ;;
+esac

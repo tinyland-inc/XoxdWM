@@ -146,57 +146,45 @@ vr-benchmark-gpu:
     cargo test --manifest-path "{{project_root}}/compositor/Cargo.toml" \
         --features full-backend,vr -- --test-threads=1 benchmark
 
-# ── beyond ─────────────────────────────────────────────
+# ── beyond / remote setup ─────────────────────────────
 
-[group('vr')]
-beyond-deploy-phase1 host="honey":
-    @echo "Deploying Phase 1 prerequisites to {{host}}..."
-    scp "{{project_root}}/packaging/udev/99-exwm-vr.rules" jess@{{host}}:/tmp/99-exwm-vr.rules
-    scp "{{project_root}}/packaging/scripts/honey-phase1-setup.sh" jess@{{host}}:/tmp/honey-phase1-setup.sh
-    @echo "Run on {{host}}: sudo bash /tmp/honey-phase1-setup.sh"
+setup_script := project_root + "/packaging/scripts/exwm-vr-setup"
 
+# Deploy the unified setup script to a remote host, then run a command.
+# Usage: just beyond-remote <host> <command>
+#   just beyond-remote honey prereqs     — install groups + udev (sudo)
+#   just beyond-remote honey verify      — check display, USB, permissions
+#   just beyond-remote honey beyond-status
 [group('vr')]
-beyond-deploy-phase2 host="honey":
-    @echo "Deploying Phase 2 kernel upgrade to {{host}}..."
-    scp "{{project_root}}/packaging/scripts/honey-phase2-kernel.sh" jess@{{host}}:/tmp/honey-phase2-kernel.sh
-    @echo "Run on {{host}}: sudo bash /tmp/honey-phase2-kernel.sh"
+beyond-remote host command:
+    @echo "=== {{host}}: {{command}} ==="
+    scp -q "{{setup_script}}" "{{project_root}}/packaging/udev/99-exwm-vr.rules" jess@{{host}}:/tmp/
+    ssh jess@{{host}} "chmod +x /tmp/exwm-vr-setup && /tmp/exwm-vr-setup {{command}}"
+
+# Same as beyond-remote but wraps in sudo (prompts for password).
+[group('vr')]
+beyond-remote-sudo host command:
+    @echo "=== {{host}}: sudo {{command}} ==="
+    scp -q "{{setup_script}}" "{{project_root}}/packaging/udev/99-exwm-vr.rules" jess@{{host}}:/tmp/
+    ssh jess@{{host}} "chmod +x /tmp/exwm-vr-setup && echo 'Running with sudo...' && sudo /tmp/exwm-vr-setup {{command}}"
+
+# Shorthand aliases for common operations
+[group('vr')]
+beyond-status host="honey":
+    just beyond-remote {{host}} beyond-status
 
 [group('vr')]
 beyond-verify host="honey":
-    @echo "Running display verification on {{host}}..."
-    ssh jess@{{host}} "bash -s" < "{{project_root}}/packaging/scripts/honey-phase3-verify.sh"
-
-[group('vr')]
-beyond-status host="honey":
-    @echo "Beyond 2e status on {{host}}..."
-    #!/usr/bin/env bash
-    set -euo pipefail
-    echo "=== USB ==="
-    ssh jess@{{host}} "lsusb | grep -i '35bd\|bigscreen\|bigeye' || echo 'Not detected'"
-    echo "=== DRM ==="
-    ssh jess@{{host}} 'for c in /sys/class/drm/card*-DP-*/; do n=$(basename "$c"); s=$(cat "$c/status" 2>/dev/null); nd=$(cat "$c/non_desktop" 2>/dev/null); echo "  $n: status=$s non_desktop=$nd"; done'
-    echo "=== hidraw ==="
-    ssh jess@{{host}} 'for h in /dev/hidraw*; do hnum=$(basename "$h"); perms=$(stat -c "%a %U:%G" "$h"); name=$(cat /sys/class/hidraw/$hnum/device/uevent 2>/dev/null | grep HID_NAME | cut -d= -f2); echo "  $h: $perms ($name)"; done'
+    just beyond-remote {{host}} verify
 
 [group('vr')]
 beyond-hid-test host="honey":
-    @echo "Testing Beyond HID access on {{host}}..."
-    ssh jess@{{host}} 'python3 -c "
-import struct, os
-for i in range(6):
-    path = f\"/dev/hidraw{i}\"
-    try:
-        with open(f\"/sys/class/hidraw/hidraw{i}/device/uevent\") as f:
-            name = [l.split(\"=\",1)[1].strip() for l in f if l.startswith(\"HID_NAME\")][0]
-        if \"Beyond\" in name:
-            fd = os.open(path, os.O_RDWR)
-            print(f\"  {path}: {name} — opened OK\")
-            os.close(fd)
-    except PermissionError:
-        print(f\"  {path}: {name} — PERMISSION DENIED\")
-    except Exception as e:
-        pass
-" 2>/dev/null || echo "  Python3 not available or test failed"'
+    just beyond-remote {{host}} beyond-hid-test
+
+[group('vr')]
+beyond-setup host="honey":
+    @echo "Full setup on {{host}} (sudo required)..."
+    just beyond-remote-sudo {{host}} full-setup
 
 # ── dev ────────────────────────────────────────────────
 
