@@ -16,6 +16,8 @@ let
     mdDoc
     ;
 
+  mcfg = cfg.monado;
+
   # Build the Emacs package with EWWM elisp packages loaded
   emacsWithPackages = cfg.emacs.package.pkgs.emacsWithPackages (epkgs:
     cfg.emacs.extraPackages epkgs
@@ -44,6 +46,18 @@ let
   hasGraphics =
     (config.hardware.graphics.enable or false)
     || (config.hardware.opengl.enable or false);
+
+  # Sway config snippet for VR host compositor
+  swayConfigFile = ../.. + "/packaging/sway/config";
+
+  # Monado environment file for the systemd service
+  monadoEnvFile = pkgs.writeText "monado-env" (concatStringsSep "\n" [
+    "XRT_COMPOSITOR_FORCE_WAYLAND=1"
+    "XRT_COMPOSITOR_WAYLAND_CONNECTOR=${mcfg.connector}"
+    "STEAMVR_LH_ENABLE=1"
+    "XRT_COMPOSITOR_COMPUTE=1"
+    "LH_OVERRIDE_IPD_MM=64"
+  ]);
 
 in {
 
@@ -157,6 +171,41 @@ in {
           - `cyton`       -- 8-channel Cyton board
           - `cyton-daisy` -- 16-channel Cyton + Daisy
           - `synthetic`   -- synthetic data for development/testing
+        '';
+      };
+    };
+
+    # ── Host Compositor ───────────────────────────────────────────────
+
+    hostCompositor = mkOption {
+      type = types.enum [ "sway" "none" ];
+      default = "none";
+      description = mdDoc ''
+        Host compositor for VR development.
+
+        - `none` -- no host compositor managed by this module (default)
+        - `sway` -- use Sway as the host Wayland compositor managing
+          the desktop monitor while VR runtimes (Monado/SteamVR)
+          acquire the HMD via DRM lease
+      '';
+    };
+
+    # ── Monado Integration ────────────────────────────────────────────
+
+    monado = {
+      enable = mkEnableOption (mdDoc ''
+        Monado VR runtime integration with environment configuration,
+        CAP_SYS_NICE capability, and a dedicated systemd user service
+      '');
+
+      connector = mkOption {
+        type = types.str;
+        default = "DP-2";
+        example = "DP-3";
+        description = mdDoc ''
+          Wayland connector name for the VR HMD output.
+          Use `swaymsg -t get_outputs` or check `/sys/class/drm/` to
+          find the correct connector for your headset.
         '';
       };
     };
@@ -440,6 +489,65 @@ in {
           ProtectHome = "read-only";
           NoNewPrivileges = true;
           SupplementaryGroups = [ "dialout" ];
+        };
+      };
+    })
+
+    # ════════════════════════════════════════════════════════════════════
+    # Host Compositor: Sway
+    # ════════════════════════════════════════════════════════════════════
+    (mkIf (cfg.hostCompositor == "sway") {
+      programs.sway = {
+        enable = true;
+        wrapperFeatures.gtk = true;
+      };
+
+      environment.systemPackages = [
+        pkgs.foot
+        pkgs.wmenu
+      ];
+
+      # Seatd provides rootless seat management for Sway
+      services.seatd.enable = true;
+
+      # Install EXWM-VR sway config as a drop-in
+      environment.etc."sway/config.d/exwm-vr.conf".source = swayConfigFile;
+    })
+
+    # ════════════════════════════════════════════════════════════════════
+    # Monado Integration
+    # ════════════════════════════════════════════════════════════════════
+    (mkIf mcfg.enable {
+      environment.systemPackages = [
+        pkgs.monado
+      ];
+
+      # Monado environment configuration
+      environment.etc."exwm-vr/monado-env".source = monadoEnvFile;
+
+      # Monado systemd user service with CAP_SYS_NICE for real-time
+      # frame scheduling and reduced compositor latency
+      systemd.user.services.exwm-vr-monado = {
+        description = "Monado OpenXR Runtime for EXWM-VR";
+        documentation = [ "https://monado.freedesktop.org" ];
+
+        after = [ "graphical-session.target" ];
+        partOf = [ "graphical-session.target" ];
+
+        serviceConfig = {
+          Type = "simple";
+          ExecStart = "${pkgs.monado}/bin/monado-service";
+          Restart = "on-failure";
+          RestartSec = 3;
+          EnvironmentFile = "/etc/exwm-vr/monado-env";
+          AmbientCapabilities = "CAP_SYS_NICE";
+          # Hardening
+          ProtectHome = "read-only";
+          NoNewPrivileges = false;  # required for AmbientCapabilities
+          RestrictNamespaces = true;
+          LockPersonality = true;
+          MemoryDenyWriteExecute = false;  # GPU JIT requires W+X pages
+          SupplementaryGroups = [ "video" ];
         };
       };
     })

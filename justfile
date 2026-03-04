@@ -113,29 +113,29 @@ vr-drm-info:
 
 [group('vr')]
 vr-hardware-test suite="smoke":
-    @echo "Running VR hardware test suite: {{suite}}..."
     #!/usr/bin/env bash
     set -euo pipefail
+    echo "Running VR hardware test suite: {{suite}}..."
     case "{{suite}}" in
-        smoke)
-            echo "--- Smoke test: build + basic GPU tests ---"
-            cargo test --manifest-path "{{project_root}}/compositor/Cargo.toml" \
-                --features full-backend,vr
-            ;;
-        drm-lease)
-            echo "--- DRM lease tests ---"
-            cargo test --manifest-path "{{project_root}}/compositor/Cargo.toml" \
-                --features full-backend,vr -- --test-threads=1 drm_lease
-            ;;
-        full)
-            echo "--- Full VR hardware test suite ---"
-            cargo test --manifest-path "{{project_root}}/compositor/Cargo.toml" \
-                --features full-backend,vr -- --test-threads=1
-            ;;
-        *)
-            echo "Unknown suite: {{suite}} (use smoke, drm-lease, or full)"
-            exit 1
-            ;;
+    smoke)
+        echo "--- Smoke test: build + basic GPU tests ---"
+        cargo test --manifest-path "{{project_root}}/compositor/Cargo.toml" \
+            --features full-backend,vr
+        ;;
+    drm-lease)
+        echo "--- DRM lease tests ---"
+        cargo test --manifest-path "{{project_root}}/compositor/Cargo.toml" \
+            --features full-backend,vr -- --test-threads=1 drm_lease
+        ;;
+    full)
+        echo "--- Full VR hardware test suite ---"
+        cargo test --manifest-path "{{project_root}}/compositor/Cargo.toml" \
+            --features full-backend,vr -- --test-threads=1
+        ;;
+    *)
+        echo "Unknown suite: {{suite}} (use smoke, drm-lease, or full)"
+        exit 1
+        ;;
     esac
 
 [group('vr')]
