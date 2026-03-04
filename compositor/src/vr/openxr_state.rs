@@ -29,7 +29,10 @@ use super::link_hints::LinkHintState;
 use super::scene::VrScene;
 use super::bci_state::BciState;
 use super::follow_mode::FollowMode;
+use super::gpu_power::GpuPowerState;
 use super::overlay::OverlayManager;
+use super::radial_menu::RadialMenu;
+use super::capture_visibility::CaptureVisibilityManager;
 use super::transient_3d::TransientChainManager;
 use super::virtual_keyboard::VirtualKeyboardState;
 use super::vr_interaction::VrInteraction;
@@ -144,8 +147,11 @@ pub struct VrState {
     pub virtual_keyboard: VirtualKeyboardState,
     pub bci: BciState,
     pub follow_mode: FollowMode,
+    pub gpu_power: GpuPowerState,
     pub transient_chains: TransientChainManager,
     pub overlay_manager: OverlayManager,
+    pub radial_menu: RadialMenu,
+    pub capture_visibility: CaptureVisibilityManager,
 
     // OpenXR objects (Option because they're created incrementally)
     entry: Option<xr::Entry>,
@@ -193,8 +199,11 @@ impl VrState {
             virtual_keyboard: VirtualKeyboardState::new(),
             bci: BciState::new(),
             follow_mode: FollowMode::new(),
+            gpu_power: GpuPowerState::new(),
             transient_chains: TransientChainManager::new(),
             overlay_manager: OverlayManager::new(),
+            radial_menu: RadialMenu::new(),
+            capture_visibility: CaptureVisibilityManager::new(),
             entry: None,
             instance: None,
             system_id: None,

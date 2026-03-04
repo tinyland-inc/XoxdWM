@@ -26,14 +26,14 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # Uncomment for VR hardware support (Monado, WiVRn, OpenComposite)
-    # nixpkgs-xr = {
-    #   url = "github:nix-community/nixpkgs-xr";
-    #   inputs.nixpkgs.follows = "nixpkgs";
-    # };
+    # VR hardware support (Monado, WiVRn, OpenComposite)
+    nixpkgs-xr = {
+      url = "github:nix-community/nixpkgs-xr";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, emacs-overlay, rust-overlay, flake-utils, nix2container, home-manager }:
+  outputs = { self, nixpkgs, emacs-overlay, rust-overlay, flake-utils, nix2container, home-manager, nixpkgs-xr }:
     let
       version = "0.5.0";
 

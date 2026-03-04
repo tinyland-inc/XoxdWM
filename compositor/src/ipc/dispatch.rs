@@ -207,6 +207,20 @@ pub fn handle_message(state: &mut EwwmState, client_id: u64, raw: &str) -> Optio
         Some("vr-overlay-remove") => handle_vr_overlay_remove(state, msg_id, &value),
         Some("vr-overlay-list") => handle_vr_overlay_list(state, msg_id),
         Some("vr-overlay-configure") => handle_vr_overlay_configure(state, msg_id, &value),
+        // VR radial menu
+        Some("vr-radial-open") => handle_vr_radial_open(state, msg_id),
+        Some("vr-radial-close") => handle_vr_radial_close(state, msg_id),
+        Some("vr-radial-toggle") => handle_vr_radial_toggle(state, msg_id),
+        Some("vr-radial-configure") => handle_vr_radial_configure(state, msg_id, &value),
+        Some("vr-radial-status") => handle_vr_radial_status(state, msg_id),
+        // VR capture visibility
+        Some("vr-capture-set") => handle_vr_capture_set(state, msg_id, &value),
+        Some("vr-capture-get") => handle_vr_capture_get(state, msg_id, &value),
+        Some("vr-capture-status") => handle_vr_capture_status(state, msg_id),
+        // GPU power management
+        Some("gpu-power-status") => handle_gpu_power_status(state, msg_id),
+        Some("gpu-power-set-profile") => handle_gpu_power_set_profile(state, msg_id, &value),
+        Some("gpu-power-detect") => handle_gpu_power_detect(state, msg_id),
         Some(other) => Some(error_response(
             msg_id,
             &format!("unknown message type: {other}"),
@@ -2851,6 +2865,172 @@ fn handle_vr_overlay_configure(
     }
 
     Some(ok_response(msg_id))
+}
+
+// ── VR Radial Menu ──────────────────────────────────────────
+
+fn handle_vr_radial_open(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let center = state.vr_state.interaction.head_pose.position;
+    state.vr_state.radial_menu.open(center);
+    Some(ok_response(msg_id))
+}
+
+fn handle_vr_radial_close(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    state.vr_state.radial_menu.close();
+    Some(ok_response(msg_id))
+}
+
+fn handle_vr_radial_toggle(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let center = state.vr_state.interaction.head_pose.position;
+    state.vr_state.radial_menu.toggle(center);
+    Some(ok_response(msg_id))
+}
+
+fn handle_vr_radial_configure(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    // Apply radius if provided.
+    if let Some(radius) = get_float(value, "radius") {
+        state.vr_state.radial_menu.radius = radius as f32;
+    }
+    if let Some(inner) = get_float(value, "inner-radius") {
+        state.vr_state.radial_menu.inner_radius = inner as f32;
+    }
+
+    // Parse items list if provided: each item is (:id "x" :label "y").
+    // For simplicity, also accept flat pairs via repeated id/label fields
+    // encoded by the Elisp side as a single configure message.
+    // The items are sent as serialized pairs in the s-expression.
+    // We rebuild the item list from scratch.
+    if let Some(items_raw) = get_keyword(value, "items") {
+        // Simple fallback: items are not easily parsed from the raw keyword.
+        // Instead, we accept them as a sequence of id-N / label-N keys.
+        debug!("radial-configure: items field present (raw parse)");
+    }
+
+    // Accept bulk items via indexed keys: id-0, label-0, id-1, label-1, ...
+    let mut items: Vec<(String, String)> = Vec::new();
+    for i in 0..32 {
+        let id_key = format!("id-{}", i);
+        let label_key = format!("label-{}", i);
+        match (get_string(value, &id_key), get_string(value, &label_key)) {
+            (Some(id), Some(label)) => items.push((id, label)),
+            _ => break,
+        }
+    }
+    if !items.is_empty() {
+        state.vr_state.radial_menu.set_items(items);
+    }
+
+    Some(ok_response(msg_id))
+}
+
+fn handle_vr_radial_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let sexp = state.vr_state.radial_menu.to_sexp();
+    Some(format!(
+        "(:type :response :id {} :status :ok :radial {})",
+        msg_id, sexp
+    ))
+}
+
+// ── VR Capture Visibility ───────────────────────────────────
+
+fn handle_vr_capture_set(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    use crate::vr::capture_visibility::CaptureVisibility;
+
+    let surface_id = match get_int(value, "surface") {
+        Some(id) => id as u64,
+        None => return Some(error_response(msg_id, "missing :surface")),
+    };
+    let vis_str = get_keyword(value, "visibility").unwrap_or_else(|| "visible".to_string());
+    let visibility = match CaptureVisibility::from_str(&vis_str) {
+        Some(v) => v,
+        None => {
+            return Some(error_response(
+                msg_id,
+                "invalid :visibility (use visible, hidden, or sensitive)",
+            ))
+        }
+    };
+
+    state
+        .vr_state
+        .capture_visibility
+        .set_visibility(surface_id, visibility);
+    Some(ok_response(msg_id))
+}
+
+fn handle_vr_capture_get(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    let surface_id = match get_int(value, "surface") {
+        Some(id) => id as u64,
+        None => return Some(error_response(msg_id, "missing :surface")),
+    };
+    let vis = state.vr_state.capture_visibility.get_visibility(surface_id);
+    Some(format!(
+        "(:type :response :id {} :status :ok :surface {} :visibility :{})",
+        msg_id, surface_id, vis.as_str()
+    ))
+}
+
+fn handle_vr_capture_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let sexp = state.vr_state.capture_visibility.to_sexp();
+    Some(format!(
+        "(:type :response :id {} :status :ok :capture {})",
+        msg_id, sexp
+    ))
+}
+
+fn handle_gpu_power_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let sexp = state.vr_state.gpu_power.to_sexp();
+    Some(format!(
+        "(:type :response :id {} :status :ok :gpu-power {})",
+        msg_id, sexp
+    ))
+}
+
+fn handle_gpu_power_set_profile(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    use crate::vr::gpu_power::GpuPowerProfile;
+
+    let profile_str = match get_keyword(value, "profile") {
+        Some(s) => s,
+        None => return Some(error_response(msg_id, "missing :profile")),
+    };
+    let profile = match GpuPowerProfile::from_str(&profile_str) {
+        Some(p) => p,
+        None => {
+            return Some(error_response(
+                msg_id,
+                "invalid :profile (use auto, low, normal, or high)",
+            ))
+        }
+    };
+    match state.vr_state.gpu_power.set_profile(profile) {
+        Ok(()) => Some(ok_response(msg_id)),
+        Err(e) => Some(error_response(msg_id, &e)),
+    }
+}
+
+fn handle_gpu_power_detect(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    state.vr_state.gpu_power.run_detect();
+    let sexp = state.vr_state.gpu_power.to_sexp();
+    Some(format!(
+        "(:type :response :id {} :status :ok :gpu-power {})",
+        msg_id, sexp
+    ))
 }
 
 // ── Helpers ────────────────────────────────────────────────

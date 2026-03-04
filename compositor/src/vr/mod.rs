@@ -48,5 +48,8 @@ pub mod motor_imagery;
 pub mod fatigue_eeg;
 pub mod bci_state;
 pub mod follow_mode;
+pub mod gpu_power;
 pub mod transient_3d;
 pub mod overlay;
+pub mod radial_menu;
+pub mod capture_visibility;
