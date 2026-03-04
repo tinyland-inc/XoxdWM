@@ -158,14 +158,14 @@ setup_script := project_root + "/packaging/scripts/exwm-vr-setup"
 [group('vr')]
 beyond-remote host command:
     @echo "=== {{host}}: {{command}} ==="
-    scp -q "{{setup_script}}" "{{project_root}}/packaging/udev/99-exwm-vr.rules" "{{project_root}}/packaging/udev/98-bigscreen-non-desktop.rules" "{{project_root}}/packaging/scripts/beyond-power-on" jess@{{host}}:/tmp/
+    scp -q "{{setup_script}}" "{{project_root}}/packaging/udev/99-exwm-vr.rules" "{{project_root}}/packaging/udev/98-bigscreen-non-desktop.rules" "{{project_root}}/packaging/scripts/beyond-power-on" "{{project_root}}/packaging/systemd/exwm-vr-beyond-power.service" jess@{{host}}:/tmp/
     ssh jess@{{host}} "chmod +x /tmp/exwm-vr-setup /tmp/beyond-power-on && /tmp/exwm-vr-setup {{command}}"
 
 # Same as beyond-remote but wraps in sudo (prompts for password).
 [group('vr')]
 beyond-remote-sudo host command:
     @echo "=== {{host}}: sudo {{command}} ==="
-    scp -q "{{setup_script}}" "{{project_root}}/packaging/udev/99-exwm-vr.rules" "{{project_root}}/packaging/udev/98-bigscreen-non-desktop.rules" "{{project_root}}/packaging/scripts/beyond-power-on" jess@{{host}}:/tmp/
+    scp -q "{{setup_script}}" "{{project_root}}/packaging/udev/99-exwm-vr.rules" "{{project_root}}/packaging/udev/98-bigscreen-non-desktop.rules" "{{project_root}}/packaging/scripts/beyond-power-on" "{{project_root}}/packaging/systemd/exwm-vr-beyond-power.service" jess@{{host}}:/tmp/
     ssh jess@{{host}} "chmod +x /tmp/exwm-vr-setup /tmp/beyond-power-on && echo 'Running with sudo...' && sudo /tmp/exwm-vr-setup {{command}}"
 
 # Shorthand aliases for common operations

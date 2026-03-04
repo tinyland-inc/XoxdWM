@@ -35,7 +35,11 @@ const FAN_SPEED_MIN: u8 = 40;
 const FAN_SPEED_MAX: u8 = 100;
 
 /// Display power-on report ID.
-const POWER_ON_REPORT_ID: u8 = 0x06;
+///
+/// The Beyond HID descriptor has NO explicit report IDs (38-byte descriptor,
+/// vendor page 0xFFFF).  All reports use implicit ID 0x00.
+/// The "0x06" value in early research was a misidentified vendor payload byte.
+const POWER_ON_REPORT_ID: u8 = 0x00;
 
 // ── Helper functions ─────────────────────────────────────────
 
@@ -65,17 +69,19 @@ pub fn build_feature_report(cmd: u8, data: &[u8]) -> [u8; REPORT_SIZE] {
     report
 }
 
-/// Build the 5-packet display power-on sequence (from Wireshark capture).
+/// Build the 5-packet display power-on sequence.
+///
+/// Verified on hardware (honey, 2026-03-04).  The Beyond HID descriptor
+/// has no explicit report IDs — all reports use implicit ID 0x00.
 ///
 /// ```text
-/// Report ID 0x06, payload: 00 22 00 00  (x3)
-/// Report ID 0x06, payload: 00 22 01 00  (x1)
-/// Report ID 0x06, payload: 00 22 02 00  (x1)
+/// [0x00, 0x00, 0x22, 0x00, 0x00, ...zeros]  (x3, phase 0)
+/// [0x00, 0x00, 0x22, 0x01, 0x00, ...zeros]  (x1, phase 1)
+/// [0x00, 0x00, 0x22, 0x02, 0x00, ...zeros]  (x1, phase 2)
 /// ```
 ///
-/// These are modeled as GET feature-report requests that wake the display
-/// controller.  In practice, the HID transport sends them as
-/// `send_feature_report` calls.
+/// Sent as `send_feature_report` calls via HIDIOCSFEATURE ioctl.
+/// Falls back to write() (OUTPUT report) if ioctl returns EPIPE.
 pub fn build_power_on_sequence() -> Vec<[u8; REPORT_SIZE]> {
     let mut packets = Vec::with_capacity(5);
 
@@ -575,7 +581,7 @@ mod tests {
     fn test_power_on_sequence_content() {
         let seq = build_power_on_sequence();
 
-        // Packets 0-2: report_id=0x06, 00 22 00 00
+        // Packets 0-2: report_id=0x00, 00 22 00 00
         for i in 0..3 {
             assert_eq!(seq[i][0], POWER_ON_REPORT_ID);
             assert_eq!(seq[i][1], 0x00);
@@ -584,13 +590,13 @@ mod tests {
             assert_eq!(seq[i][4], 0x00);
         }
 
-        // Packet 3: report_id=0x06, 00 22 01 00
+        // Packet 3: report_id=0x00, 00 22 01 00
         assert_eq!(seq[3][0], POWER_ON_REPORT_ID);
         assert_eq!(seq[3][2], 0x22);
         assert_eq!(seq[3][3], 0x01);
         assert_eq!(seq[3][4], 0x00);
 
-        // Packet 4: report_id=0x06, 00 22 02 00
+        // Packet 4: report_id=0x00, 00 22 02 00
         assert_eq!(seq[4][0], POWER_ON_REPORT_ID);
         assert_eq!(seq[4][2], 0x22);
         assert_eq!(seq[4][3], 0x02);

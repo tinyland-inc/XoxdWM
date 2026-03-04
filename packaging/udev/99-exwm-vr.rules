@@ -22,3 +22,8 @@ KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="35bd", ATTRS{idProduct
 KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="35bd", ATTRS{idProduct}=="4004", MODE="0660", GROUP="video", TAG+="uaccess"
 # USB device access (all Bigscreen devices)
 SUBSYSTEM=="usb", ATTR{idVendor}=="35bd", MODE="0666"
+
+# ── Beyond auto power-on ──────────────────────────────────────────
+# When the Beyond HMD hidraw device appears, trigger the power-on service.
+# The service sends the 5-packet HID wake sequence via beyond-power-on.
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="35bd", ATTRS{idProduct}=="0101", ACTION=="add", TAG+="systemd", ENV{SYSTEMD_WANTS}="exwm-vr-beyond-power.service"

@@ -364,7 +364,22 @@ in {
         # We match on the product name "Beyond" which is a plain ASCII string in EDID.
         # Note: non_desktop sysfs attr only exists if kernel/driver supports it.
         ACTION=="change", SUBSYSTEM=="drm", ENV{HOTPLUG}=="1", RUN+="/bin/sh -c 'for c in /sys/class/drm/card*-DP-*/; do if [ -f $$c/edid ] && ${pkgs.binutils-unwrapped}/bin/strings $$c/edid 2>/dev/null | grep -q Beyond; then [ -w $$c/non_desktop ] && echo 1 > $$c/non_desktop 2>/dev/null; fi; done'"
+        # Beyond auto power-on: trigger systemd service when HMD hidraw appears
+        KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="35bd", ATTRS{idProduct}=="0101", ACTION=="add", TAG+="systemd", ENV{SYSTEMD_WANTS}="exwm-vr-beyond-power.service"
       '';
+
+      # Beyond display power-on system service
+      systemd.services.exwm-vr-beyond-power = {
+        description = "Bigscreen Beyond Display Power-On";
+        documentation = [ "https://github.com/Jesssullivan/XoxdWM" ];
+        after = [ "systemd-udev-settle.service" ];
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+          ExecStartPre = "${pkgs.coreutils}/bin/sleep 2";
+          ExecStart = "${cfg.compositor.package}/libexec/beyond-power-on";
+        };
+      };
 
       # DRM lease capability for direct HMD display access
       security.wrappers.ewwm-compositor-drm = mkIf (cfg.vr.runtime == "monado") {

@@ -1,0 +1,19 @@
+[Unit]
+Description=Bigscreen Beyond Display Power-On
+Documentation=https://github.com/Jesssullivan/XoxdWM
+# Start after udev has settled and hidraw devices are available.
+After=systemd-udev-settle.service
+# Only relevant when the Beyond HMD is connected.
+ConditionPathExists=/dev/hidraw0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# beyond-power-on scans all /dev/hidraw* for 35bd:0101 — safe to run
+# even when Beyond is not connected (exits cleanly with error message).
+ExecStart=/usr/libexec/exwm-vr/beyond-power-on
+# Allow 10 seconds for HID device to settle after USB enumeration.
+ExecStartPre=/usr/bin/sleep 2
+
+[Install]
+WantedBy=multi-user.target

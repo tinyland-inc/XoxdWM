@@ -75,6 +75,25 @@ cmd_prereqs() {
         echo "  Installed: /etc/udev/rules.d/98-bigscreen-non-desktop.rules"
     echo
 
+    # Beyond power-on service
+    local svc_src="$PROJECT_ROOT/packaging/systemd/exwm-vr-beyond-power.service"
+    [ ! -f "$svc_src" ] && svc_src="/tmp/exwm-vr-beyond-power.service"
+    if [ -f "$svc_src" ]; then
+        cp "$svc_src" /etc/systemd/system/exwm-vr-beyond-power.service
+        # Install beyond-power-on script
+        mkdir -p /usr/libexec/exwm-vr
+        local po_src="$PROJECT_ROOT/packaging/scripts/beyond-power-on"
+        if [ -f "$po_src" ]; then
+            cp "$po_src" /usr/libexec/exwm-vr/beyond-power-on
+            chmod +x /usr/libexec/exwm-vr/beyond-power-on
+        elif [ -f /tmp/beyond-power-on ]; then
+            cp /tmp/beyond-power-on /usr/libexec/exwm-vr/beyond-power-on
+            chmod +x /usr/libexec/exwm-vr/beyond-power-on
+        fi
+        systemctl daemon-reload
+        echo "  Installed: exwm-vr-beyond-power.service"
+    fi
+
     # Firmware check
     echo "[3/3] Checking amdgpu firmware..."
     if ls /lib/firmware/amdgpu/gc_12_0_0* >/dev/null 2>&1; then
