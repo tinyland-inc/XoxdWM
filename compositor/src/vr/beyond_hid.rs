@@ -154,6 +154,218 @@ pub trait HidTransport {
     fn get_feature_report(&mut self, report_id: u8, buf: &mut [u8]) -> Result<usize, String>;
 }
 
+// ── Linux hidraw transport ──────────────────────────────────
+//
+// Uses raw ioctl(HIDIOCSFEATURE) / ioctl(HIDIOCGFEATURE) on /dev/hidraw*.
+// Falls back to write() if ioctl returns EPIPE (device expects OUTPUT reports).
+// Only compiled on Linux — other platforms use StubHidTransport.
+
+#[cfg(target_os = "linux")]
+mod linux_hidraw {
+    use super::*;
+    use std::fs;
+    use std::os::unix::io::AsRawFd;
+
+    /// ioctl direction bits.
+    const IOC_WRITE: u32 = 1;
+    const IOC_READ: u32 = 2;
+
+    /// Compute an ioctl number: _IOC(dir, type, nr, size).
+    const fn ioc(dir: u32, ioc_type: u8, nr: u8, size: usize) -> libc::c_ulong {
+        ((dir << 30) | ((size as u32) << 16) | ((ioc_type as u32) << 8) | nr as u32)
+            as libc::c_ulong
+    }
+
+    /// HIDIOCSFEATURE(len) = _IOC(_IOC_WRITE|_IOC_READ, 'H', 0x06, len)
+    const HIDIOCSFEATURE: libc::c_ulong =
+        ioc(IOC_WRITE | IOC_READ, b'H', 0x06, REPORT_SIZE);
+
+    /// HIDIOCGFEATURE(len) = _IOC(_IOC_WRITE|_IOC_READ, 'H', 0x07, len)
+    const HIDIOCGFEATURE: libc::c_ulong =
+        ioc(IOC_WRITE | IOC_READ, b'H', 0x07, REPORT_SIZE);
+
+    /// Real Linux HID transport using /dev/hidraw*.
+    ///
+    /// Opens the device on construction; closes on drop.
+    pub struct LinuxHidTransport {
+        file: fs::File,
+        dev_path: String,
+    }
+
+    impl LinuxHidTransport {
+        /// Open a specific hidraw device path.
+        pub fn open(dev_path: &str) -> Result<Self, String> {
+            let file = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(dev_path)
+                .map_err(|e| format!("cannot open {}: {}", dev_path, e))?;
+
+            info!("LinuxHidTransport: opened {}", dev_path);
+            Ok(Self {
+                file,
+                dev_path: dev_path.to_string(),
+            })
+        }
+
+        /// Scan /sys/class/hidraw for a Bigscreen Beyond HMD (35bd:0101).
+        ///
+        /// Returns `(dev_path, name, serial)` on success.
+        pub fn find_beyond() -> Result<(String, String, String), String> {
+            let hidraw_dir = "/sys/class/hidraw";
+            let entries = fs::read_dir(hidraw_dir)
+                .map_err(|e| format!("cannot read {}: {}", hidraw_dir, e))?;
+
+            let mut paths: Vec<_> = entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .collect();
+            paths.sort();
+
+            for entry in paths {
+                let uevent_path = entry.join("device/uevent");
+                let contents = match fs::read_to_string(&uevent_path) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+
+                let mut hid_id = None;
+                let mut hid_name = String::new();
+                let mut hid_uniq = String::new();
+
+                for line in contents.lines() {
+                    if let Some(val) = line.strip_prefix("HID_ID=") {
+                        hid_id = Some(val.to_string());
+                    } else if let Some(val) = line.strip_prefix("HID_NAME=") {
+                        hid_name = val.to_string();
+                    } else if let Some(val) = line.strip_prefix("HID_UNIQ=") {
+                        hid_uniq = val.to_string();
+                    }
+                }
+
+                let hid_id = match hid_id {
+                    Some(id) => id,
+                    None => continue,
+                };
+
+                // HID_ID format: "BBBB:VVVVVVVV:PPPPPPPP"
+                let parts: Vec<&str> = hid_id.split(':').collect();
+                if parts.len() != 3 {
+                    continue;
+                }
+
+                let vendor = u16::from_str_radix(parts[1].trim_start_matches('0'), 16)
+                    .unwrap_or(0);
+                let product = u16::from_str_radix(parts[2].trim_start_matches('0'), 16)
+                    .unwrap_or(0);
+
+                if vendor == BEYOND_VENDOR_ID && product == BEYOND_PRODUCT_ID_HMD {
+                    let hidraw_name = entry.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    let dev_path = format!("/dev/{}", hidraw_name);
+
+                    if hid_name.is_empty() {
+                        hid_name = "Bigscreen Beyond".to_string();
+                    }
+
+                    info!(
+                        "LinuxHidTransport: found Beyond at {} (serial: {})",
+                        dev_path,
+                        if hid_uniq.is_empty() { "unknown" } else { &hid_uniq }
+                    );
+                    return Ok((dev_path, hid_name, hid_uniq));
+                }
+            }
+
+            Err("no Bigscreen Beyond HMD found on hidraw".to_string())
+        }
+
+        /// Find and open the Beyond HMD automatically.
+        pub fn open_beyond() -> Result<Self, String> {
+            let (dev_path, _name, _serial) = Self::find_beyond()?;
+            Self::open(&dev_path)
+        }
+
+        /// Get the device path.
+        pub fn device_path(&self) -> &str {
+            &self.dev_path
+        }
+    }
+
+    impl HidTransport for LinuxHidTransport {
+        fn send_feature_report(&mut self, data: &[u8; REPORT_SIZE]) -> Result<usize, String> {
+            let fd = self.file.as_raw_fd();
+
+            // Try ioctl HIDIOCSFEATURE first.
+            let ret = unsafe {
+                libc::ioctl(fd, HIDIOCSFEATURE, data.as_ptr())
+            };
+
+            if ret >= 0 {
+                debug!(
+                    "LinuxHidTransport: sent feature report cmd=0x{:02X} ({} bytes)",
+                    data[1], ret
+                );
+                return Ok(ret as usize);
+            }
+
+            // EPIPE (errno 32) means device expects OUTPUT reports via write().
+            let errno = std::io::Error::last_os_error();
+            if errno.raw_os_error() == Some(libc::EPIPE) {
+                debug!("LinuxHidTransport: HIDIOCSFEATURE returned EPIPE, falling back to write()");
+                let written = unsafe {
+                    libc::write(fd, data.as_ptr() as *const libc::c_void, REPORT_SIZE)
+                };
+                if written >= 0 {
+                    return Ok(written as usize);
+                }
+                return Err(format!(
+                    "write() fallback failed on {}: {}",
+                    self.dev_path,
+                    std::io::Error::last_os_error()
+                ));
+            }
+
+            Err(format!(
+                "HIDIOCSFEATURE failed on {}: {}",
+                self.dev_path, errno
+            ))
+        }
+
+        fn get_feature_report(&mut self, report_id: u8, buf: &mut [u8]) -> Result<usize, String> {
+            let fd = self.file.as_raw_fd();
+
+            // Set report ID in first byte of buffer.
+            if !buf.is_empty() {
+                buf[0] = report_id;
+            }
+
+            let ret = unsafe {
+                libc::ioctl(fd, HIDIOCGFEATURE, buf.as_mut_ptr())
+            };
+
+            if ret >= 0 {
+                debug!(
+                    "LinuxHidTransport: got feature report id=0x{:02X} ({} bytes)",
+                    report_id, ret
+                );
+                Ok(ret as usize)
+            } else {
+                Err(format!(
+                    "HIDIOCGFEATURE failed on {}: {}",
+                    self.dev_path,
+                    std::io::Error::last_os_error()
+                ))
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub use linux_hidraw::LinuxHidTransport;
+
 /// Stub transport that logs commands but does not touch hardware.
 /// Used on macOS and in unit tests.
 #[derive(Debug, Default)]
