@@ -345,7 +345,7 @@ cmd_sway_setup() {
     user=$(_check_user)
 
     echo "=== Sway Host Compositor Setup ==="
-    echo "  Building sway 1.11 (wlroots) for VR development."
+    echo "  Building sway 1.10 (wlroots 0.18) for VR development."
     echo "  Sway manages the desktop monitor; VR HMD is DRM-leased to Monado."
     echo
 
@@ -354,14 +354,19 @@ cmd_sway_setup() {
         dnf config-manager --disable "$repo" 2>/dev/null || true
     done
 
-    # Build dependencies
+    # Build dependencies (core)
     echo "[1/5] Installing build dependencies..."
     dnf install -y \
         wlroots-devel wayland-devel wayland-protocols-devel \
-        libinput-devel pixman-devel mesa-libEGL-devel mesa-libGLES-devel \
+        libinput-devel libevdev-devel pixman-devel \
+        mesa-libEGL-devel mesa-libGLES-devel \
         libdrm-devel json-c-devel pango-devel cairo-devel pcre2-devel \
         meson ninja-build gcc scdoc \
-        seatd xorg-x11-server-Xwayland foot wmenu 2>&1 | tail -5
+        seatd xorg-x11-server-Xwayland 2>&1 | tail -5
+    # Terminal: foot preferred, xterm as fallback (foot not in Rocky 10 repos)
+    if ! command -v foot >/dev/null 2>&1; then
+        dnf install -y xterm 2>&1 | tail -2
+    fi
     echo
 
     # Enable and start seatd
@@ -371,8 +376,8 @@ cmd_sway_setup() {
     echo "  seatd: $(systemctl is-active seatd.service 2>/dev/null || echo 'not running')"
     echo
 
-    # Build sway
-    local sway_ver="1.11"
+    # Build sway (1.10 for wlroots 0.18 from repos; DRM lease since 1.7)
+    local sway_ver="1.10"
     local build_dir="/tmp/sway-build"
     echo "[3/5] Building sway $sway_ver..."
     if command -v sway >/dev/null 2>&1; then
@@ -381,8 +386,6 @@ cmd_sway_setup() {
         echo "  sway already installed: $cur_ver"
         if [ "$cur_ver" = "$sway_ver" ]; then
             echo "  Skipping build (already at $sway_ver)"
-        else
-            echo "  Upgrading from $cur_ver to $sway_ver"
         fi
     fi
 
@@ -421,7 +424,7 @@ cmd_sway_setup() {
     echo "  sway: $(command -v sway 2>/dev/null || echo 'NOT FOUND')"
     echo "  seatd: $(systemctl is-active seatd.service 2>/dev/null)"
     echo "  Xwayland: $(command -v Xwayland 2>/dev/null || echo 'NOT FOUND')"
-    echo "  foot: $(command -v foot 2>/dev/null || echo 'NOT FOUND')"
+    echo "  terminal: $(command -v foot 2>/dev/null || command -v xterm 2>/dev/null || echo 'NOT FOUND')"
     echo
     echo "=== Sway setup complete ==="
     echo "  Start from TTY: sway"

@@ -1,8 +1,8 @@
 # EXWM-VR Sway Configuration
 #
-# Minimal sway config for VR development hosts.  Sway serves as the "host
-# compositor" managing the desktop monitor while Monado/SteamVR acquires
-# the VR headset via DRM lease.
+# Minimal sway config for VR development hosts.  Sway 1.10 (wlroots 0.18)
+# serves as the "host compositor" managing the desktop monitor while
+# Monado/SteamVR acquires the VR headset via DRM lease.
 #
 # Architecture:
 #   Sway (host compositor)
@@ -23,8 +23,8 @@
 # ── Variables ─────────────────────────────────────────────
 
 set $mod Mod4
-set $term foot
-set $menu wmenu-run
+set $term xterm
+set $menu dmenu_run
 
 # ── Outputs ───────────────────────────────────────────────
 
