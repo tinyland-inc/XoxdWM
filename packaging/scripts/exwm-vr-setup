@@ -147,14 +147,21 @@ cmd_kernel_upgrade() {
     dracut --force "/boot/initramfs-${new_kver}.img" "$new_kver"
     echo
 
-    # GRUB
-    echo "[4/4] Configuring GRUB..."
+    # GRUB / BLS
+    echo "[4/4] Configuring boot..."
+    # Note: do NOT use video=DP-2:d — it disables the connector entirely,
+    # preventing Monado/SteamVR from acquiring it via DRM lease.
+    # non_desktop is handled by 98-bigscreen-non-desktop.rules udev rule.
+    local vr_args="amdgpu.modeset=1 amdgpu.dc=1 amdgpu.dcdebugmask=0x10"
+    # Update /etc/default/grub for future kernel installs
     if ! grep -q 'amdgpu.modeset=1' /etc/default/grub; then
-        sed -i 's/GRUB_CMDLINE_LINUX="\(.*\)"/GRUB_CMDLINE_LINUX="\1 amdgpu.modeset=1 amdgpu.dc=1 amdgpu.dcdebugmask=0x10"/' /etc/default/grub
-        grub2-mkconfig -o /boot/grub2/grub.cfg
+        sed -i "s/GRUB_CMDLINE_LINUX=\"\(.*\)\"/GRUB_CMDLINE_LINUX=\"\1 $vr_args\"/" /etc/default/grub
     fi
+    # BLS-enabled systems (Rocky 10+): grubby updates the actual boot entry
+    grubby --update-kernel="/boot/vmlinuz-$new_kver" --args="$vr_args"
     grubby --set-default="/boot/vmlinuz-$new_kver"
     echo "  Default boot: $new_kver"
+    echo "  Args added: $vr_args"
     echo
 
     # Non-desktop udev rule (copy from repo or /tmp)
