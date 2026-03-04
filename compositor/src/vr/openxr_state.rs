@@ -28,6 +28,13 @@ use super::hand_tracking::HandTrackingState;
 use super::link_hints::LinkHintState;
 use super::scene::VrScene;
 use super::bci_state::BciState;
+use super::follow_mode::FollowMode;
+use super::beyond_hid::BeyondHidManager;
+use super::gpu_power::GpuPowerState;
+use super::overlay::OverlayManager;
+use super::radial_menu::RadialMenu;
+use super::capture_visibility::CaptureVisibilityManager;
+use super::transient_3d::TransientChainManager;
 use super::virtual_keyboard::VirtualKeyboardState;
 use super::vr_interaction::VrInteraction;
 
@@ -97,6 +104,26 @@ impl Default for HmdInfo {
     }
 }
 
+/// Data returned from a VR frame tick for the renderer.
+pub struct VrFrameData {
+    /// Per-eye view poses and FOVs from locate_views.
+    pub views: Vec<xr::View>,
+    /// Predicted display time for this frame.
+    pub predicted_display_time: xr::Time,
+    /// Whether we should render (false = submit empty frame).
+    pub should_render: bool,
+}
+
+impl std::fmt::Debug for VrFrameData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VrFrameData")
+            .field("views_count", &self.views.len())
+            .field("predicted_display_time", &self.predicted_display_time)
+            .field("should_render", &self.should_render)
+            .finish()
+    }
+}
+
 /// Central VR state managing the full OpenXR lifecycle.
 pub struct VrState {
     pub enabled: bool,
@@ -120,15 +147,27 @@ pub struct VrState {
     pub gesture: GestureState,
     pub virtual_keyboard: VirtualKeyboardState,
     pub bci: BciState,
+    pub follow_mode: FollowMode,
+    pub beyond_hid: BeyondHidManager,
+    pub gpu_power: GpuPowerState,
+    pub transient_chains: TransientChainManager,
+    pub overlay_manager: OverlayManager,
+    pub radial_menu: RadialMenu,
+    pub capture_visibility: CaptureVisibilityManager,
 
     // OpenXR objects (Option because they're created incrementally)
     entry: Option<xr::Entry>,
     instance: Option<xr::Instance>,
     system_id: Option<xr::SystemId>,
-    // Session and related objects would be stored here
-    // but require generic type parameters that depend on the graphics API.
-    // For now, we track state and defer actual session creation to the
-    // render thread which has the OpenGL context.
+
+    // Session and swapchain objects
+    session: Option<xr::Session<xr::OpenGL>>,
+    frame_waiter: Option<xr::FrameWaiter>,
+    frame_stream: Option<xr::FrameStream<xr::OpenGL>>,
+    swapchains: Vec<xr::Swapchain<xr::OpenGL>>,
+    swapchain_images: Vec<Vec<u32>>,
+    reference_space: Option<xr::Space>,
+    view_config_views: Vec<xr::ViewConfigurationView>,
 
     // Recovery
     max_retries: u32,
@@ -161,9 +200,23 @@ impl VrState {
             gesture: GestureState::new(),
             virtual_keyboard: VirtualKeyboardState::new(),
             bci: BciState::new(),
+            follow_mode: FollowMode::new(),
+            beyond_hid: BeyondHidManager::new(),
+            gpu_power: GpuPowerState::new(),
+            transient_chains: TransientChainManager::new(),
+            overlay_manager: OverlayManager::new(),
+            radial_menu: RadialMenu::new(),
+            capture_visibility: CaptureVisibilityManager::new(),
             entry: None,
             instance: None,
             system_id: None,
+            session: None,
+            frame_waiter: None,
+            frame_stream: None,
+            swapchains: Vec::new(),
+            swapchain_images: Vec::new(),
+            reference_space: None,
+            view_config_views: Vec::new(),
             max_retries: 3,
             retry_count: 0,
             last_retry: None,
@@ -296,6 +349,113 @@ impl VrState {
         Ok(true)
     }
 
+    /// Create an OpenGL session using the provided EGL handles.
+    ///
+    /// # Safety
+    /// The EGL display, config, and context must be valid and current on
+    /// the calling thread.
+    pub fn create_session(
+        &mut self,
+        egl_display: *mut std::ffi::c_void,
+        egl_config: *mut std::ffi::c_void,
+        egl_context: *mut std::ffi::c_void,
+    ) -> anyhow::Result<()> {
+        let instance = self.instance.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("OpenXR instance not initialized"))?;
+        let system_id = self.system_id
+            .ok_or_else(|| anyhow::anyhow!("OpenXR system not discovered"))?;
+
+        // Query view configuration for PRIMARY_STEREO
+        let view_config_views = instance.enumerate_view_configuration_views(
+            system_id,
+            xr::ViewConfigurationType::PRIMARY_STEREO,
+        )?;
+        info!(
+            "VR: view config: {} views, recommended {}x{} per eye",
+            view_config_views.len(),
+            view_config_views.first().map(|v| v.recommended_image_rect_width).unwrap_or(0),
+            view_config_views.first().map(|v| v.recommended_image_rect_height).unwrap_or(0),
+        );
+
+        // Update HMD info with actual recommended resolution
+        if let Some(view) = view_config_views.first() {
+            self.hmd_info.recommended_width = view.recommended_image_rect_width;
+            self.hmd_info.recommended_height = view.recommended_image_rect_height;
+        }
+
+        // Create OpenGL graphics binding
+        let session_create_info = xr::opengl::SessionCreateInfo::Xlib {
+            x_display: std::ptr::null_mut(),
+            visualid: 0,
+            glx_fb_config: std::ptr::null_mut(),
+            glx_drawable: 0,
+            glx_context: egl_context as _,
+        };
+
+        // Create session
+        let (session, frame_waiter, frame_stream) = unsafe {
+            instance.create_session::<xr::OpenGL>(system_id, &session_create_info)?
+        };
+        info!("VR: OpenGL session created");
+
+        // Create reference space
+        let reference_space = session.create_reference_space(
+            match self.active_reference_space {
+                ReferenceSpaceType::Local => xr::ReferenceSpaceType::LOCAL,
+                ReferenceSpaceType::Stage => xr::ReferenceSpaceType::STAGE,
+                ReferenceSpaceType::View => xr::ReferenceSpaceType::VIEW,
+            },
+            xr::Posef::IDENTITY,
+        )?;
+
+        // Enumerate swapchain formats (prefer SRGB8_ALPHA8)
+        let formats: Vec<u32> = session.enumerate_swapchain_formats()?;
+        let format = select_swapchain_format(&formats);
+        info!("VR: selected swapchain format: 0x{:X}", format);
+
+        // Create per-eye swapchains and enumerate images
+        let mut swapchains = Vec::new();
+        let mut swapchain_images = Vec::new();
+
+        for (eye_idx, view_config) in view_config_views.iter().enumerate() {
+            let swapchain = session.create_swapchain(&xr::SwapchainCreateInfo {
+                create_flags: xr::SwapchainCreateFlags::EMPTY,
+                usage_flags: xr::SwapchainUsageFlags::COLOR_ATTACHMENT
+                    | xr::SwapchainUsageFlags::SAMPLED,
+                format,
+                sample_count: 1,
+                width: view_config.recommended_image_rect_width,
+                height: view_config.recommended_image_rect_height,
+                face_count: 1,
+                array_size: 1,
+                mip_count: 1,
+            })?;
+
+            let images: Vec<u32> = swapchain.enumerate_images()?;
+
+            info!(
+                "VR: eye {} swapchain: {}x{}, {} images",
+                eye_idx,
+                view_config.recommended_image_rect_width,
+                view_config.recommended_image_rect_height,
+                images.len(),
+            );
+
+            swapchain_images.push(images);
+            swapchains.push(swapchain);
+        }
+
+        self.session = Some(session);
+        self.frame_waiter = Some(frame_waiter);
+        self.frame_stream = Some(frame_stream);
+        self.swapchains = swapchains;
+        self.swapchain_images = swapchain_images;
+        self.reference_space = Some(reference_space);
+        self.view_config_views = view_config_views;
+
+        Ok(())
+    }
+
     /// Returns the session state as a string for IPC.
     pub fn session_state_str(&self) -> &'static str {
         if !self.enabled {
@@ -322,6 +482,21 @@ impl VrState {
         self.frame_timing.stats_sexp()
     }
 
+    /// Returns a reference to swapchains for the renderer.
+    pub fn swapchains_mut(&mut self) -> &mut Vec<xr::Swapchain<xr::OpenGL>> {
+        &mut self.swapchains
+    }
+
+    /// Returns swapchain image texture IDs.
+    pub fn swapchain_images(&self) -> &[Vec<u32>] {
+        &self.swapchain_images
+    }
+
+    /// Returns view configuration views.
+    pub fn view_config_views(&self) -> &[xr::ViewConfigurationView] {
+        &self.view_config_views
+    }
+
     /// Handle a session state transition.
     pub fn handle_state_change(&mut self, new_state: VrSessionState) {
         let old = self.session_state;
@@ -330,12 +505,22 @@ impl VrState {
 
         match new_state {
             VrSessionState::Ready => {
-                // Should call session.begin() with PRIMARY_STEREO
-                info!("VR: session ready, should begin");
+                if let Some(session) = &self.session {
+                    match session.begin(xr::ViewConfigurationType::PRIMARY_STEREO) {
+                        Ok(_) => info!("VR: session begun (PRIMARY_STEREO)"),
+                        Err(e) => error!("VR: failed to begin session: {}", e),
+                    }
+                } else {
+                    info!("VR: session ready but no session object (create_session not called)");
+                }
             }
             VrSessionState::Stopping => {
-                // Should call session.end()
-                info!("VR: session stopping, should end");
+                if let Some(session) = &self.session {
+                    match session.end() {
+                        Ok(_) => info!("VR: session ended"),
+                        Err(e) => error!("VR: failed to end session: {}", e),
+                    }
+                }
             }
             VrSessionState::Exiting => {
                 info!("VR: session exiting, cleanup");
@@ -374,6 +559,7 @@ impl VrState {
         );
 
         // Destroy current state
+        self.destroy_session();
         self.instance = None;
         self.system_id = None;
         self.session_state = VrSessionState::Idle;
@@ -393,30 +579,193 @@ impl VrState {
         }
     }
 
+    /// Clean up session-related resources.
+    fn destroy_session(&mut self) {
+        self.swapchains.clear();
+        self.swapchain_images.clear();
+        self.reference_space = None;
+        self.frame_stream = None;
+        self.frame_waiter = None;
+        self.session = None;
+        self.view_config_views.clear();
+    }
+
     /// Set the active reference space.
     pub fn set_reference_space(&mut self, space_type: ReferenceSpaceType) {
         self.active_reference_space = space_type;
         info!("VR: reference space set to {:?}", space_type);
-    }
 
-    /// Poll for VR events.
-    pub fn poll_events(&mut self) {
-        // In a full implementation, this would call instance.poll_event()
-        // and handle SessionStateChanged events.
-        // For now, this is a placeholder.
-    }
-
-    /// Run one VR frame tick.
-    pub fn tick_frame(&mut self) {
-        if !self.enabled || self.session_state != VrSessionState::Focused {
-            return;
+        // Recreate reference space if session is active
+        if let Some(session) = &self.session {
+            let xr_type = match space_type {
+                ReferenceSpaceType::Local => xr::ReferenceSpaceType::LOCAL,
+                ReferenceSpaceType::Stage => xr::ReferenceSpaceType::STAGE,
+                ReferenceSpaceType::View => xr::ReferenceSpaceType::VIEW,
+            };
+            match session.create_reference_space(xr_type, xr::Posef::IDENTITY) {
+                Ok(space) => {
+                    self.reference_space = Some(space);
+                    info!("VR: reference space recreated");
+                }
+                Err(e) => error!("VR: failed to recreate reference space: {}", e),
+            }
         }
-        // In a full implementation:
-        // 1. session.wait_frame()
-        // 2. session.begin_frame()
-        // 3. acquire swapchain, render, release
-        // 4. session.end_frame()
-        // For now, record synthetic timing for testing
+    }
+
+    /// Poll for VR events from the OpenXR runtime.
+    pub fn poll_events(&mut self) {
+        let instance = match &self.instance {
+            Some(inst) => inst,
+            None => return,
+        };
+
+        // Collect state changes first to avoid borrow conflict:
+        // instance.poll_event() borrows self.instance immutably, but
+        // handle_state_change() needs &mut self.
+        let mut state_changes: Vec<VrSessionState> = Vec::new();
+        let mut event_buffer = xr::EventDataBuffer::new();
+        while let Ok(Some(event)) = instance.poll_event(&mut event_buffer) {
+            match event {
+                xr::Event::SessionStateChanged(state_event) => {
+                    let new_state = match state_event.state() {
+                        xr::SessionState::IDLE => VrSessionState::Idle,
+                        xr::SessionState::READY => VrSessionState::Ready,
+                        xr::SessionState::SYNCHRONIZED => VrSessionState::Synchronized,
+                        xr::SessionState::VISIBLE => VrSessionState::Visible,
+                        xr::SessionState::FOCUSED => VrSessionState::Focused,
+                        xr::SessionState::STOPPING => VrSessionState::Stopping,
+                        xr::SessionState::LOSS_PENDING => VrSessionState::LossPending,
+                        xr::SessionState::EXITING => VrSessionState::Exiting,
+                        _ => {
+                            debug!("VR: unknown session state, ignoring");
+                            continue;
+                        }
+                    };
+                    state_changes.push(new_state);
+                }
+                xr::Event::InstanceLossPending(_) => {
+                    warn!("VR: instance loss pending");
+                    state_changes.push(VrSessionState::LossPending);
+                }
+                xr::Event::EventsLost(lost) => {
+                    warn!("VR: {} events lost", lost.lost_event_count());
+                }
+                _ => {
+                    debug!("VR: unhandled event");
+                }
+            }
+        }
+
+        // Now process collected state changes with full mutable access to self
+        for new_state in state_changes {
+            self.handle_state_change(new_state);
+        }
+    }
+
+    /// Run one VR frame tick. Returns frame data for the renderer.
+    pub fn tick_frame(&mut self) -> Option<VrFrameData> {
+        if !self.enabled {
+            return None;
+        }
+
+        // Only produce frames in renderable states
+        let renderable = matches!(
+            self.session_state,
+            VrSessionState::Synchronized | VrSessionState::Visible | VrSessionState::Focused
+        );
+        if !renderable {
+            return None;
+        }
+
+        let frame_waiter = self.frame_waiter.as_mut()?;
+        let frame_stream = self.frame_stream.as_mut()?;
+        let session = self.session.as_ref()?;
+        let space = self.reference_space.as_ref()?;
+
+        // Wait for frame timing
+        let frame_state = match frame_waiter.wait() {
+            Ok(state) => state,
+            Err(e) => {
+                error!("VR: wait_frame failed: {}", e);
+                return None;
+            }
+        };
+
+        // Begin frame
+        if let Err(e) = frame_stream.begin() {
+            error!("VR: begin_frame failed: {}", e);
+            return None;
+        }
+
+        let should_render = frame_state.should_render;
+        if !should_render {
+            // Submit empty frame
+            if let Err(e) = frame_stream.end(
+                frame_state.predicted_display_time,
+                xr::EnvironmentBlendMode::OPAQUE,
+                &[],
+            ) {
+                error!("VR: end_frame (empty) failed: {}", e);
+            }
+            return Some(VrFrameData {
+                views: Vec::new(),
+                predicted_display_time: frame_state.predicted_display_time,
+                should_render: false,
+            });
+        }
+
+        // Locate eye views
+        let (_, views) = match session.locate_views(
+            xr::ViewConfigurationType::PRIMARY_STEREO,
+            frame_state.predicted_display_time,
+            space,
+        ) {
+            Ok(result) => result,
+            Err(e) => {
+                error!("VR: locate_views failed: {}", e);
+                // End frame with empty layers on error
+                let _ = frame_stream.end(
+                    frame_state.predicted_display_time,
+                    xr::EnvironmentBlendMode::OPAQUE,
+                    &[],
+                );
+                return None;
+            }
+        };
+
+        // Record frame timing (no per-phase breakdown yet; pass zeros)
+        self.frame_timing.record_frame(0.0, 0.0, 0.0);
+
+        Some(VrFrameData {
+            views,
+            predicted_display_time: frame_state.predicted_display_time,
+            should_render: true,
+        })
+    }
+
+    /// End a frame with the given composition layers.
+    pub fn end_frame<'a>(
+        &mut self,
+        predicted_time: xr::Time,
+        layers: &[xr::CompositionLayerProjection<'a, xr::OpenGL>],
+    ) {
+        let frame_stream = match self.frame_stream.as_mut() {
+            Some(fs) => fs,
+            None => return,
+        };
+
+        // CompositionLayerProjection Derefs to CompositionLayerBase
+        use std::ops::Deref;
+        let layer_refs: Vec<&xr::CompositionLayerBase<'_, xr::OpenGL>> =
+            layers.iter().map(|l| l.deref()).collect();
+
+        if let Err(e) = frame_stream.end(
+            predicted_time,
+            xr::EnvironmentBlendMode::OPAQUE,
+            &layer_refs,
+        ) {
+            error!("VR: end_frame failed: {}", e);
+        }
     }
 
     /// Shut down VR.
@@ -427,6 +776,7 @@ impl VrState {
         {
             self.handle_state_change(VrSessionState::Stopping);
         }
+        self.destroy_session();
         self.instance = None;
         self.system_id = None;
         self.entry = None;
@@ -469,5 +819,23 @@ impl VrState {
             self.enabled_extensions,
             self.frame_stats_sexp(),
         )
+    }
+}
+
+/// Select the best swapchain format from available formats.
+/// Prefers SRGB8_ALPHA8, falls back to RGBA8, then first available.
+fn select_swapchain_format(formats: &[u32]) -> u32 {
+    const GL_SRGB8_ALPHA8: u32 = 0x8C43;
+    const GL_RGBA8: u32 = 0x8058;
+    const GL_RGBA16F: u32 = 0x881A;
+
+    if formats.contains(&GL_SRGB8_ALPHA8) {
+        GL_SRGB8_ALPHA8
+    } else if formats.contains(&GL_RGBA8) {
+        GL_RGBA8
+    } else if formats.contains(&GL_RGBA16F) {
+        GL_RGBA16F
+    } else {
+        formats.first().copied().unwrap_or(GL_RGBA8)
     }
 }

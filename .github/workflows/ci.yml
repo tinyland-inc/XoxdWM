@@ -13,45 +13,65 @@ concurrency:
 jobs:
   byte-compile:
     name: Byte Compile
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_SELFHOSTED == 'true' && 'tinyland-nix' || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: cachix/install-nix-action@v30
+      - uses: ryanccn/attic-action@v0
+        if: env.ATTIC_SERVER != ''
+        with:
+          endpoint: ${{ env.ATTIC_SERVER }}
+          cache: ${{ env.ATTIC_CACHE }}
+          token: ${{ secrets.ATTIC_TOKEN }}
       - name: Byte-compile all Elisp
         run: nix develop --command just build
 
   ert-test:
     name: ERT Tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_SELFHOSTED == 'true' && 'tinyland-nix' || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: cachix/install-nix-action@v30
+      - uses: ryanccn/attic-action@v0
+        if: env.ATTIC_SERVER != ''
+        with:
+          endpoint: ${{ env.ATTIC_SERVER }}
+          cache: ${{ env.ATTIC_CACHE }}
+          token: ${{ secrets.ATTIC_TOKEN }}
       - name: Run ERT test suite
         run: nix develop --command just test
 
   lint:
     name: Lint Elisp
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_SELFHOSTED == 'true' && 'tinyland-nix' || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: cachix/install-nix-action@v30
+      - uses: ryanccn/attic-action@v0
+        if: env.ATTIC_SERVER != ''
+        with:
+          endpoint: ${{ env.ATTIC_SERVER }}
+          cache: ${{ env.ATTIC_CACHE }}
+          token: ${{ secrets.ATTIC_TOKEN }}
       - name: Lint Elisp (strict byte-compile)
         run: nix develop --command just lint-elisp
 
   nix-build:
     name: Nix Build
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_SELFHOSTED == 'true' && 'tinyland-nix' || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: cachix/install-nix-action@v30
+      - uses: ryanccn/attic-action@v0
+        if: env.ATTIC_SERVER != ''
+        with:
+          endpoint: ${{ env.ATTIC_SERVER }}
+          cache: ${{ env.ATTIC_CACHE }}
+          token: ${{ secrets.ATTIC_TOKEN }}
       - name: Check flake evaluates
         run: nix flake check --no-build
       - name: Build devShell
@@ -59,13 +79,18 @@ jobs:
 
   changelog-validate:
     name: Changelog Validate
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_SELFHOSTED == 'true' && 'tinyland-nix' || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: cachix/install-nix-action@v30
+      - uses: ryanccn/attic-action@v0
+        if: env.ATTIC_SERVER != ''
+        with:
+          endpoint: ${{ env.ATTIC_SERVER }}
+          cache: ${{ env.ATTIC_CACHE }}
+          token: ${{ secrets.ATTIC_TOKEN }}
       - name: Validate git-cliff config
         run: nix develop --command git-cliff --validate cliff.toml

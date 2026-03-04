@@ -1,0 +1,104 @@
+name: Runner Health Check
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Daily at 06:00 UTC
+    - cron: '0 6 * * *'
+
+concurrency:
+  group: runner-health
+  cancel-in-progress: true
+
+jobs:
+  nix-runner:
+    name: Nix Runner Health
+    runs-on: ${{ vars.USE_SELFHOSTED == 'true' && 'tinyland-nix' || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v30
+      - uses: ryanccn/attic-action@v0
+        if: env.ATTIC_SERVER != ''
+        with:
+          endpoint: ${{ env.ATTIC_SERVER }}
+          cache: ${{ env.ATTIC_CACHE }}
+          token: ${{ secrets.ATTIC_TOKEN }}
+
+      - name: Runner info
+        run: |
+          echo "=== Runner ==="
+          echo "Hostname: $(hostname)"
+          echo "OS: $(uname -sr)"
+          echo "Arch: $(uname -m)"
+          echo "CPUs: $(nproc)"
+          echo "Memory: $(free -h | awk '/^Mem:/ {print $2}')"
+          echo "Disk: $(df -h / | awk 'NR==2 {print $4 " free"}')"
+
+      - name: Nix health
+        run: |
+          echo "=== Nix ==="
+          nix --version
+          echo "Store: $(nix path-info --store-dir 2>/dev/null || echo '/nix/store')"
+          echo "Trusted: $(nix show-config | grep trusted-users || echo 'N/A')"
+          nix flake check --no-build
+
+      - name: Attic cache check
+        if: env.ATTIC_SERVER != ''
+        run: |
+          echo "=== Attic ==="
+          attic cache info "$ATTIC_CACHE" 2>&1 || echo "Attic cache not reachable"
+
+      - name: Quick devShell build
+        run: nix build .#devShells.x86_64-linux.default --no-link
+
+      - name: Emacs available
+        run: |
+          nix develop --command emacs --version | head -1
+
+  vr-runner:
+    name: VR Runner Health
+    runs-on: [self-hosted, honey]
+    timeout-minutes: 10
+    if: vars.USE_SELFHOSTED == 'true'
+    steps:
+      - name: Runner info
+        run: |
+          echo "=== VR Runner ==="
+          echo "Hostname: $(hostname)"
+          echo "OS: $(uname -sr)"
+          echo "Arch: $(uname -m)"
+          echo "Kernel: $(uname -r)"
+
+      - name: GPU status
+        run: |
+          echo "=== GPU ==="
+          lspci | grep -i vga || echo "No VGA device found"
+          ls -la /dev/dri/ || echo "No DRI devices"
+          cat /sys/class/drm/card0/device/power_dpm_force_performance_level 2>/dev/null || echo "No AMD power management"
+
+      - name: DRM connectors
+        run: |
+          echo "=== DRM Connectors ==="
+          for conn in /sys/class/drm/card*-*/; do
+            name=$(basename "$conn")
+            status=$(cat "$conn/status" 2>/dev/null || echo "?")
+            non_desktop=$(cat "$conn/non_desktop" 2>/dev/null || echo "?")
+            echo "  $name: status=$status non_desktop=$non_desktop"
+          done
+
+      - name: Vulkan check
+        run: |
+          echo "=== Vulkan ==="
+          vulkaninfo --summary 2>&1 | head -20 || echo "vulkaninfo not available"
+
+      - name: Monado check
+        run: |
+          echo "=== Monado ==="
+          which monado-cli 2>/dev/null && monado-cli probe 2>&1 || echo "Monado not available"
+
+      - name: USB devices (HMD)
+        run: |
+          echo "=== USB HMD ==="
+          lsusb 2>/dev/null | grep -iE "bigscreen|beyond|valve|htc|meta|pico" || echo "No known HMD USB devices"

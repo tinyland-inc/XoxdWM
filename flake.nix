@@ -25,9 +25,15 @@
       url = "github:nix-community/home-manager";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # VR hardware support (Monado, WiVRn, OpenComposite)
+    nixpkgs-xr = {
+      url = "github:nix-community/nixpkgs-xr";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, emacs-overlay, rust-overlay, flake-utils, nix2container, home-manager }:
+  outputs = { self, nixpkgs, emacs-overlay, rust-overlay, flake-utils, nix2container, home-manager, nixpkgs-xr }:
     let
       version = "0.5.0";
 
@@ -59,6 +65,25 @@
         homeManagerModules = {
           exwm-vr = import ./nix/home-manager/exwm-vr.nix;
           default = self.homeManagerModules.exwm-vr;
+        };
+
+        # Kernel overlay: Bigscreen Beyond EDID non-desktop quirk patch
+        # Usage in NixOS config:
+        #   boot.kernelPackages = pkgs.linuxPackages_latest.extend (self: super: {
+        #     kernel = super.kernel.override {
+        #       kernelPatches = [{ name = "bigscreen-beyond-non-desktop";
+        #         patch = ewwm.packages.${system}.bigscreen-beyond-edid-patch; }];
+        #     };
+        #   });
+        overlays.kernel-beyond = final: prev: {
+          linuxPackages_beyond = prev.linuxPackages_latest.extend (lpSelf: lpPrev: {
+            kernel = lpPrev.kernel.override {
+              kernelPatches = (lpPrev.kernel.kernelPatches or []) ++ [{
+                name = "bigscreen-beyond-non-desktop";
+                patch = ./patches/bigscreen-beyond-edid.patch;
+              }];
+            };
+          });
         };
       };
 

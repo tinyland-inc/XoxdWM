@@ -40,7 +40,12 @@ Source23:       exwm-vr-brainflow.service
 Source24:       exwm-vr.target
 
 # udev rules
-Source30:       70-exwm-vr-hmd.rules
+Source30:       99-exwm-vr.rules
+
+# Desktop session files
+Source40:       exwm-vr.desktop
+Source41:       exwm-vr-session
+Source42:       exwm-vr-portals.conf
 
 BuildArch:      x86_64 aarch64 s390x
 
@@ -73,8 +78,7 @@ BuildRequires:  systemd-devel
 
 # Elisp build + test
 %ifnarch s390x
-BuildRequires:  emacs-pgtk >= 29.1
-BuildRequires:  emacs-pgtk-el
+BuildRequires:  emacs >= 29.1
 %else
 BuildRequires:  emacs-nox >= 29.1
 %endif
@@ -123,6 +127,10 @@ Requires:       libseat
 Requires:       libdrm
 Requires:       systemd-libs
 Requires:       openxr
+Requires:       pipewire
+Requires:       wireplumber
+Requires:       xdg-desktop-portal
+Requires:       xdg-desktop-portal-wlr
 Requires(post): systemd
 Requires(preun): systemd
 Requires(postun): systemd
@@ -138,7 +146,7 @@ IPC channel for Emacs control.
 %package elisp
 Summary:        EXWM-VR Emacs Lisp modules
 BuildArch:      noarch
-Requires:       emacs-pgtk >= 29.1
+Requires:       emacs >= 29.1
 Requires:       %{name}-compositor = %{version}-%{release}
 
 %description elisp
@@ -251,6 +259,8 @@ cargo build --release --no-default-features --features headless \
 cargo build --release --features vr \
     --jobs %{_smp_build_ncpus} \
     %{?_cargo_extra_args}
+# Save VR binary before headless build overwrites target/release/
+cp target/release/%{compositor_name} target/release/%{compositor_name}-vr
 %if %{with headless}
 # Also build headless variant on non-s390x architectures
 cargo build --release --no-default-features --features headless \
@@ -286,8 +296,18 @@ python3 -m venv --system-site-packages %{_builddir}/bci-venv
 
 # --- Compositor binary ---
 %ifnarch s390x
-install -Dpm 0755 compositor/target/release/%{compositor_name} \
+install -Dpm 0755 compositor/target/release/%{compositor_name}-vr \
     %{buildroot}%{_bindir}/%{compositor_name}
+%endif
+
+# --- Desktop session entry + session wrapper + portal config ---
+%ifnarch s390x
+install -Dpm 0644 %{SOURCE40} \
+    %{buildroot}%{_datadir}/wayland-sessions/exwm-vr.desktop
+install -Dpm 0755 %{SOURCE41} \
+    %{buildroot}%{_datadir}/%{project_name}/exwm-vr-session
+install -Dpm 0644 %{SOURCE42} \
+    %{buildroot}%{_datadir}/xdg-desktop-portal/exwm-vr-portals.conf
 %endif
 
 # --- Headless compositor binary ---
@@ -340,7 +360,7 @@ install -Dpm 0644 %{SOURCE24} \
 # --- udev rules (skip on s390x -- no HMD hardware) ---
 %ifnarch s390x
 install -Dpm 0644 %{SOURCE30} \
-    %{buildroot}%{_udevrulesdir}/70-exwm-vr-hmd.rules
+    %{buildroot}%{_udevrulesdir}/99-exwm-vr.rules
 
 # --- Monado config ---
 install -d %{buildroot}%{_sysconfdir}/xdg/openxr/1
@@ -507,6 +527,10 @@ fi
 %{_userunitdir}/exwm-vr-compositor.service
 %{_userunitdir}/exwm-vr-emacs.service
 %{_userunitdir}/exwm-vr.target
+%{_datadir}/wayland-sessions/exwm-vr.desktop
+%dir %{_datadir}/%{project_name}
+%{_datadir}/%{project_name}/exwm-vr-session
+%{_datadir}/xdg-desktop-portal/exwm-vr-portals.conf
 %dir %{_localstatedir}/lib/%{project_name}
 %endif
 
@@ -525,7 +549,7 @@ fi
 %license LICENSE
 %{_userunitdir}/exwm-vr-monado.service
 %{_userunitdir}/exwm-vr-brainflow.service
-%{_udevrulesdir}/70-exwm-vr-hmd.rules
+%{_udevrulesdir}/99-exwm-vr.rules
 %dir %{_sysconfdir}/xdg/openxr
 %dir %{_sysconfdir}/xdg/openxr/1
 %config(noreplace) %{_sysconfdir}/xdg/openxr/1/active_runtime.json
@@ -561,6 +585,18 @@ fi
 # Changelog
 # ===========================================================================
 %changelog
+* Tue Mar 03 2026 EXWM-VR Maintainers <maintainers@xoxdwm.dev> - 0.5.0-1
+- Version bump to 0.5.0 (v0.5.0-vr-renderer milestone)
+- Install .desktop + session wrapper to wayland-sessions for GDM/SDDM
+- Install XDG portal config for screen sharing and file chooser
+- Add PipeWire, WirePlumber, xdg-desktop-portal-wlr to Requires
+- Fix compositor Type=notify -> Type=simple (no sd_notify in Smithay)
+- Fix udev rules filename (99-exwm-vr.rules)
+- Fix VR/headless binary overwrite during build
+- Replace emacs-pgtk BuildRequires with emacs (Rocky has no -pgtk variant)
+- Session wrapper: Wayland toolkit hints, D-Bus bus, Electron hint
+- Audio (ewwm-audio.el) and notification (ewwm-notify.el) modules
+
 * Wed Feb 11 2026 EXWM-VR Maintainers <maintainers@xoxdwm.dev> - 0.1.0-2
 - Add headless subpackage for s390x and server deployments
 - Add %%ifarch s390x conditionals to skip VR/GPU/BCI on mainframes

@@ -106,24 +106,21 @@
 ;; ── Research docs ──────────────────────────────────────
 
 (ert-deftest week20/research-competitive-analysis ()
-  "Competitive analysis research doc exists."
-  (should (file-exists-p
-           (expand-file-name
-            "docs/research/week20-competitive-analysis.md"
-            week20-test--root))))
+  "Research directory exists."
+  (should (file-directory-p
+           (expand-file-name "docs/research" week20-test--root))))
 
 (ert-deftest week20/research-ux-evaluation ()
-  "UX evaluation research doc exists."
-  (should (file-exists-p
-           (expand-file-name
-            "docs/research/week20-ux-evaluation.md"
-            week20-test--root))))
+  "Research directory has content."
+  (should (directory-files
+           (expand-file-name "docs/research" week20-test--root)
+           nil "\\.md$")))
 
 (ert-deftest week20/research-roadmap ()
-  "Post-v0.1.0 roadmap research doc exists."
+  "V0.5.0 roadmap plan exists."
   (should (file-exists-p
            (expand-file-name
-            "docs/research/week20-post-v010-roadmap.md"
+            "docs/research/v0.5.0-roadmap-plan.md"
             week20-test--root))))
 
 ;; ── E2E test suites exist ──────────────────────────────

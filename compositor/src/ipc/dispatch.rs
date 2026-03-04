@@ -176,6 +176,16 @@ pub fn handle_message(state: &mut EwwmState, client_id: u64, raw: &str) -> Optio
         // BCI fatigue EEG
         Some("bci-fatigue-eeg-status") => handle_bci_fatigue_eeg_status(state, msg_id),
         Some("bci-fatigue-eeg-config") => handle_bci_fatigue_eeg_config(state, msg_id, &value),
+        // DPMS output power
+        Some("dpms-get") => handle_dpms_get(state, msg_id),
+        Some("dpms-set") => handle_dpms_set(state, msg_id, &value),
+        // Screencopy (wlr-screencopy-unstable-v1)
+        Some("screencopy-status") => handle_screencopy_status(state, msg_id),
+        // Output management (wlr-output-management-unstable-v1)
+        Some("output-list") => handle_output_list(state, msg_id),
+        Some("output-configure") => handle_output_configure(state, msg_id, &value),
+        // Pointer constraints (pointer-constraints-unstable-v1)
+        Some("pointer-constraints-status") => handle_pointer_constraints_status(state, msg_id),
         // IPC recording (v0.2.0)
         Some("ipc-record-start") => handle_ipc_record_start(state, msg_id, &value),
         Some("ipc-record-stop") => handle_ipc_record_stop(state, msg_id),
@@ -183,6 +193,41 @@ pub fn handle_message(state: &mut EwwmState, client_id: u64, raw: &str) -> Optio
         // IPC security (v0.3.1)
         Some("ipc-client-info") => handle_ipc_client_info(state, client_id, msg_id),
         Some("ipc-rate-limit") => handle_ipc_rate_limit(state, client_id, msg_id, &value),
+        // VR follow mode
+        Some("vr-follow-status") => handle_vr_follow_status(state, msg_id),
+        Some("vr-follow-set-policy") => handle_vr_follow_set_policy(state, msg_id, &value),
+        Some("vr-follow-recenter") => handle_vr_follow_recenter(state, msg_id),
+        Some("vr-follow-grab-all") => handle_vr_follow_grab_all(state, msg_id),
+        // VR transient chains
+        Some("vr-transient-add") => handle_vr_transient_add(state, msg_id, &value),
+        Some("vr-transient-remove") => handle_vr_transient_remove(state, msg_id, &value),
+        Some("vr-transient-list") => handle_vr_transient_list(state, msg_id),
+        // VR overlays
+        Some("vr-overlay-create") => handle_vr_overlay_create(state, msg_id, &value),
+        Some("vr-overlay-remove") => handle_vr_overlay_remove(state, msg_id, &value),
+        Some("vr-overlay-list") => handle_vr_overlay_list(state, msg_id),
+        Some("vr-overlay-configure") => handle_vr_overlay_configure(state, msg_id, &value),
+        // VR radial menu
+        Some("vr-radial-open") => handle_vr_radial_open(state, msg_id),
+        Some("vr-radial-close") => handle_vr_radial_close(state, msg_id),
+        Some("vr-radial-toggle") => handle_vr_radial_toggle(state, msg_id),
+        Some("vr-radial-configure") => handle_vr_radial_configure(state, msg_id, &value),
+        Some("vr-radial-status") => handle_vr_radial_status(state, msg_id),
+        // VR capture visibility
+        Some("vr-capture-set") => handle_vr_capture_set(state, msg_id, &value),
+        Some("vr-capture-get") => handle_vr_capture_get(state, msg_id, &value),
+        Some("vr-capture-status") => handle_vr_capture_status(state, msg_id),
+        // GPU power management
+        Some("gpu-power-status") => handle_gpu_power_status(state, msg_id),
+        Some("gpu-power-set-profile") => handle_gpu_power_set_profile(state, msg_id, &value),
+        Some("gpu-power-detect") => handle_gpu_power_detect(state, msg_id),
+        // Bigscreen Beyond HID control
+        Some("beyond-status") => handle_beyond_status(state, msg_id),
+        Some("beyond-detect") => handle_beyond_detect(state, msg_id),
+        Some("beyond-power-on") => handle_beyond_power_on(state, msg_id),
+        Some("beyond-set-brightness") => handle_beyond_set_brightness(state, msg_id, &value),
+        Some("beyond-set-fan-speed") => handle_beyond_set_fan_speed(state, msg_id, &value),
+        Some("beyond-set-led-color") => handle_beyond_set_led_color(state, msg_id, &value),
         Some(other) => Some(error_response(
             msg_id,
             &format!("unknown message type: {other}"),
@@ -1647,6 +1692,177 @@ fn handle_headless_remove_output(state: &mut EwwmState, msg_id: i64) -> Option<S
     ))
 }
 
+// ── DPMS handlers ──────────────────────────────────────────
+
+fn handle_dpms_get(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    Some(format!(
+        "(:type :response :id {} :status :ok :dpms-state \"{}\")",
+        msg_id, state.dpms_state,
+    ))
+}
+
+fn handle_dpms_set(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    use crate::handlers::dpms::DpmsState;
+
+    let state_str = match get_string(value, "state") {
+        Some(s) => s,
+        None => return Some(error_response(msg_id, "missing :state field")),
+    };
+
+    match DpmsState::from_str_ipc(&state_str) {
+        Some(new_state) => {
+            let old = state.dpms_state;
+            state.dpms_state = new_state;
+            debug!(?old, ?new_state, "DPMS state changed");
+
+            // Notify Emacs of the state change
+            let event = format_event(
+                "dpms-changed",
+                &[("state", &new_state.to_string())],
+            );
+            IpcServer::broadcast_event(state, &event);
+
+            Some(format!(
+                "(:type :response :id {} :status :ok :dpms-state \"{}\")",
+                msg_id, new_state,
+            ))
+        }
+        None => Some(error_response(
+            msg_id,
+            &format!("invalid DPMS state: {} (use on/standby/suspend/off)", state_str),
+        )),
+    }
+}
+
+// ── Screencopy handlers ────────────────────────────────────
+
+fn handle_screencopy_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let count = state.screencopy_state.get_active_count();
+    let frames: Vec<String> = state
+        .screencopy_state
+        .active_frames
+        .iter()
+        .map(|f| f.to_string())
+        .collect();
+    let frames_sexp = if frames.is_empty() {
+        "nil".to_string()
+    } else {
+        format!("({})", frames.join(" "))
+    };
+    Some(format!(
+        "(:type :response :id {} :status :ok :active-count {} :frame-counter {} :frames {})",
+        msg_id,
+        count,
+        state.screencopy_state.frame_counter,
+        frames_sexp,
+    ))
+}
+
+// ── Output management handlers ─────────────────────────────
+
+fn handle_output_list(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let configs: Vec<String> = state
+        .output_management_state
+        .get_configurations()
+        .iter()
+        .map(|c| c.to_sexp())
+        .collect();
+    let list_sexp = if configs.is_empty() {
+        "nil".to_string()
+    } else {
+        format!("({})", configs.join(" "))
+    };
+    Some(format!(
+        "(:type :response :id {} :status :ok :serial {} :outputs {})",
+        msg_id,
+        state.output_management_state.serial,
+        list_sexp,
+    ))
+}
+
+fn handle_output_configure(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    use crate::handlers::output_management::{OutputConfig, OutputTransform};
+
+    let name = match get_string(value, "name") {
+        Some(n) => n,
+        None => return Some(error_response(msg_id, "missing :name field")),
+    };
+
+    let test_only = get_bool(value, "test-only").unwrap_or(false);
+
+    // Build config from IPC values, defaulting to existing config if present.
+    let base = state
+        .output_management_state
+        .configs
+        .iter()
+        .find(|c| c.name == name)
+        .cloned()
+        .unwrap_or_else(|| OutputConfig::new(name.clone()));
+
+    let config = OutputConfig {
+        name,
+        enabled: get_bool(value, "enabled").unwrap_or(base.enabled),
+        x: get_int(value, "x").map(|v| v as i32).unwrap_or(base.x),
+        y: get_int(value, "y").map(|v| v as i32).unwrap_or(base.y),
+        width: get_int(value, "width").map(|v| v as i32).unwrap_or(base.width),
+        height: get_int(value, "height").map(|v| v as i32).unwrap_or(base.height),
+        refresh: get_int(value, "refresh").map(|v| v as i32).unwrap_or(base.refresh),
+        scale: get_float(value, "scale").unwrap_or(base.scale),
+        transform: get_string(value, "transform")
+            .and_then(|s| OutputTransform::from_str_ipc(&s))
+            .unwrap_or(base.transform),
+    };
+
+    if test_only {
+        match state.output_management_state.test_config(&config) {
+            Ok(serial) => Some(format!(
+                "(:type :response :id {} :status :ok :serial {} :test t)",
+                msg_id, serial,
+            )),
+            Err(e) => Some(error_response(msg_id, &e)),
+        }
+    } else {
+        match state.output_management_state.apply_config(config) {
+            Ok(serial) => {
+                // Notify Emacs of the configuration change.
+                let event = format_event(
+                    "output-configured",
+                    &[("serial", &serial.to_string())],
+                );
+                IpcServer::broadcast_event(state, &event);
+
+                Some(format!(
+                    "(:type :response :id {} :status :ok :serial {})",
+                    msg_id, serial,
+                ))
+            }
+            Err(e) => Some(error_response(msg_id, &e)),
+        }
+    }
+}
+
+// ── Pointer constraints handlers ───────────────────────────
+
+fn handle_pointer_constraints_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let active = if state.pointer_constraint_active() {
+        "t"
+    } else {
+        "nil"
+    };
+    Some(format!(
+        "(:type :response :id {} :status :ok :constraint-active {})",
+        msg_id, active,
+    ))
+}
+
 // ── Gaze scroll handlers ───────────────────────────────────
 
 fn handle_gaze_scroll_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
@@ -2451,6 +2667,456 @@ fn handle_ipc_rate_limit(
         debug!(client_id, new_limit, "rate limit updated");
     }
     Some(ok_response(msg_id))
+}
+
+// ── VR follow mode handlers ──────────────────────────────
+
+fn handle_vr_follow_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let status = state.vr_state.follow_mode.status_sexp();
+    Some(format!(
+        "(:type :response :id {} :status :ok :follow {})",
+        msg_id, status
+    ))
+}
+
+fn handle_vr_follow_set_policy(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    use crate::vr::follow_mode::FollowPolicy;
+
+    let policy_str = get_keyword(value, "policy");
+    match policy_str.as_deref().and_then(FollowPolicy::from_str) {
+        Some(policy) => {
+            state.vr_state.follow_mode.set_policy(policy);
+            Some(ok_response(msg_id))
+        }
+        None => Some(error_response(
+            msg_id,
+            "invalid :policy (use disabled, focused-only, grab-all, or threshold-only)",
+        )),
+    }
+}
+
+fn handle_vr_follow_recenter(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let head_pos = state.vr_state.interaction.head_pose.position;
+    let head_rot = state.vr_state.interaction.head_pose.rotation;
+    let vr = &mut state.vr_state;
+    vr.follow_mode.recenter(head_pos, head_rot, &mut vr.scene);
+    Some(ok_response(msg_id))
+}
+
+fn handle_vr_follow_grab_all(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let head_pos = state.vr_state.interaction.head_pose.position;
+    let head_rot = state.vr_state.interaction.head_pose.rotation;
+    let vr = &mut state.vr_state;
+    vr.follow_mode.grab_all(&mut vr.scene, head_pos, head_rot);
+    Some(ok_response(msg_id))
+}
+
+// ── VR Transient Chains ──────────────────────────────────
+
+fn handle_vr_transient_add(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    use crate::vr::transient_3d::TransientPlacement;
+
+    let child_id = match get_int(value, "child") {
+        Some(id) => id as u64,
+        None => return Some(error_response(msg_id, "missing :child")),
+    };
+    let parent_id = match get_int(value, "parent") {
+        Some(id) => id as u64,
+        None => return Some(error_response(msg_id, "missing :parent")),
+    };
+    let placement_str = get_keyword(value, "placement").unwrap_or_else(|| "auto".to_string());
+    let placement = TransientPlacement::from_str(&placement_str).unwrap_or(TransientPlacement::Auto);
+
+    match state.vr_state.transient_chains.add_transient(child_id, parent_id, placement) {
+        Ok(()) => Some(ok_response(msg_id)),
+        Err(e) => Some(error_response(msg_id, &e)),
+    }
+}
+
+fn handle_vr_transient_remove(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    let child_id = match get_int(value, "child") {
+        Some(id) => id as u64,
+        None => return Some(error_response(msg_id, "missing :child")),
+    };
+    state.vr_state.transient_chains.remove_transient(child_id);
+    Some(ok_response(msg_id))
+}
+
+fn handle_vr_transient_list(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let sexp = state.vr_state.transient_chains.to_sexp();
+    Some(format!(
+        "(:type :response :id {} :status :ok :transients {})",
+        msg_id, sexp
+    ))
+}
+
+// ── VR Overlays ─────────────────────────────────────────────
+
+fn handle_vr_overlay_create(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    use crate::vr::overlay::OverlayType;
+
+    let type_str = get_keyword(value, "overlay-type").unwrap_or_else(|| "head-locked".to_string());
+    let overlay_type = match OverlayType::from_str(&type_str) {
+        Some(t) => t,
+        None => {
+            return Some(error_response(
+                msg_id,
+                "invalid :overlay-type (use world-locked, head-locked, or hand-locked)",
+            ))
+        }
+    };
+    let width = get_float(value, "width").unwrap_or(0.4) as f32;
+    let height = get_float(value, "height").unwrap_or(0.3) as f32;
+    let alpha = get_float(value, "alpha").unwrap_or(1.0) as f32;
+    let sort_order = get_int(value, "sort-order").unwrap_or(0) as i32;
+
+    let id = state
+        .vr_state
+        .overlay_manager
+        .create_overlay(overlay_type, width, height, alpha, sort_order);
+
+    if id == 0 {
+        Some(error_response(msg_id, "max overlays reached"))
+    } else {
+        Some(format!(
+            "(:type :response :id {} :status :ok :overlay-id {})",
+            msg_id, id
+        ))
+    }
+}
+
+fn handle_vr_overlay_remove(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    let overlay_id = match get_int(value, "overlay-id") {
+        Some(id) => id as u64,
+        None => return Some(error_response(msg_id, "missing :overlay-id")),
+    };
+    if state.vr_state.overlay_manager.remove_overlay(overlay_id) {
+        Some(ok_response(msg_id))
+    } else {
+        Some(error_response(msg_id, "overlay not found"))
+    }
+}
+
+fn handle_vr_overlay_list(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let sexp = state.vr_state.overlay_manager.to_sexp();
+    Some(format!(
+        "(:type :response :id {} :status :ok :overlays {})",
+        msg_id, sexp
+    ))
+}
+
+fn handle_vr_overlay_configure(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    let overlay_id = match get_int(value, "overlay-id") {
+        Some(id) => id as u64,
+        None => return Some(error_response(msg_id, "missing :overlay-id")),
+    };
+
+    let mgr = &mut state.vr_state.overlay_manager;
+
+    if mgr.get_overlay(overlay_id).is_none() {
+        return Some(error_response(msg_id, "overlay not found"));
+    }
+
+    // Apply any provided configuration fields.
+    if let Some(alpha) = get_float(value, "alpha") {
+        mgr.set_alpha(overlay_id, alpha as f32);
+    }
+    if let Some(visible) = get_bool(value, "visible") {
+        mgr.set_visible(overlay_id, visible);
+    }
+    if let Some(surface_id) = get_int(value, "surface") {
+        mgr.link_surface(overlay_id, surface_id as u64);
+    }
+
+    // Position update: check for :x :y :z fields.
+    let has_pos = get_float(value, "x").is_some()
+        || get_float(value, "y").is_some()
+        || get_float(value, "z").is_some();
+    if has_pos {
+        use crate::vr::scene::Transform3D;
+        let current = mgr.get_overlay(overlay_id).unwrap().transform;
+        let new_transform = Transform3D {
+            position: crate::vr::scene::Vec3::new(
+                get_float(value, "x").unwrap_or(current.position.x as f64) as f32,
+                get_float(value, "y").unwrap_or(current.position.y as f64) as f32,
+                get_float(value, "z").unwrap_or(current.position.z as f64) as f32,
+            ),
+            rotation: current.rotation,
+            scale: current.scale,
+        };
+        mgr.set_transform(overlay_id, new_transform);
+    }
+
+    Some(ok_response(msg_id))
+}
+
+// ── VR Radial Menu ──────────────────────────────────────────
+
+fn handle_vr_radial_open(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let center = state.vr_state.interaction.head_pose.position;
+    state.vr_state.radial_menu.open(center);
+    Some(ok_response(msg_id))
+}
+
+fn handle_vr_radial_close(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    state.vr_state.radial_menu.close();
+    Some(ok_response(msg_id))
+}
+
+fn handle_vr_radial_toggle(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let center = state.vr_state.interaction.head_pose.position;
+    state.vr_state.radial_menu.toggle(center);
+    Some(ok_response(msg_id))
+}
+
+fn handle_vr_radial_configure(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    // Apply radius if provided.
+    if let Some(radius) = get_float(value, "radius") {
+        state.vr_state.radial_menu.radius = radius as f32;
+    }
+    if let Some(inner) = get_float(value, "inner-radius") {
+        state.vr_state.radial_menu.inner_radius = inner as f32;
+    }
+
+    // Parse items list if provided: each item is (:id "x" :label "y").
+    // For simplicity, also accept flat pairs via repeated id/label fields
+    // encoded by the Elisp side as a single configure message.
+    // The items are sent as serialized pairs in the s-expression.
+    // We rebuild the item list from scratch.
+    if let Some(_items_raw) = get_keyword(value, "items") {
+        // Simple fallback: items are not easily parsed from the raw keyword.
+        // Instead, we accept them as a sequence of id-N / label-N keys.
+        debug!("radial-configure: items field present (raw parse)");
+    }
+
+    // Accept bulk items via indexed keys: id-0, label-0, id-1, label-1, ...
+    let mut items: Vec<(String, String)> = Vec::new();
+    for i in 0..32 {
+        let id_key = format!("id-{}", i);
+        let label_key = format!("label-{}", i);
+        match (get_string(value, &id_key), get_string(value, &label_key)) {
+            (Some(id), Some(label)) => items.push((id, label)),
+            _ => break,
+        }
+    }
+    if !items.is_empty() {
+        state.vr_state.radial_menu.set_items(items);
+    }
+
+    Some(ok_response(msg_id))
+}
+
+fn handle_vr_radial_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let sexp = state.vr_state.radial_menu.to_sexp();
+    Some(format!(
+        "(:type :response :id {} :status :ok :radial {})",
+        msg_id, sexp
+    ))
+}
+
+// ── VR Capture Visibility ───────────────────────────────────
+
+fn handle_vr_capture_set(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    use crate::vr::capture_visibility::CaptureVisibility;
+
+    let surface_id = match get_int(value, "surface") {
+        Some(id) => id as u64,
+        None => return Some(error_response(msg_id, "missing :surface")),
+    };
+    let vis_str = get_keyword(value, "visibility").unwrap_or_else(|| "visible".to_string());
+    let visibility = match CaptureVisibility::from_str(&vis_str) {
+        Some(v) => v,
+        None => {
+            return Some(error_response(
+                msg_id,
+                "invalid :visibility (use visible, hidden, or sensitive)",
+            ))
+        }
+    };
+
+    state
+        .vr_state
+        .capture_visibility
+        .set_visibility(surface_id, visibility);
+    Some(ok_response(msg_id))
+}
+
+fn handle_vr_capture_get(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    let surface_id = match get_int(value, "surface") {
+        Some(id) => id as u64,
+        None => return Some(error_response(msg_id, "missing :surface")),
+    };
+    let vis = state.vr_state.capture_visibility.get_visibility(surface_id);
+    Some(format!(
+        "(:type :response :id {} :status :ok :surface {} :visibility :{})",
+        msg_id, surface_id, vis.as_str()
+    ))
+}
+
+fn handle_vr_capture_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let sexp = state.vr_state.capture_visibility.to_sexp();
+    Some(format!(
+        "(:type :response :id {} :status :ok :capture {})",
+        msg_id, sexp
+    ))
+}
+
+fn handle_gpu_power_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let sexp = state.vr_state.gpu_power.to_sexp();
+    Some(format!(
+        "(:type :response :id {} :status :ok :gpu-power {})",
+        msg_id, sexp
+    ))
+}
+
+fn handle_gpu_power_set_profile(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    use crate::vr::gpu_power::GpuPowerProfile;
+
+    let profile_str = match get_keyword(value, "profile") {
+        Some(s) => s,
+        None => return Some(error_response(msg_id, "missing :profile")),
+    };
+    let profile = match GpuPowerProfile::from_str(&profile_str) {
+        Some(p) => p,
+        None => {
+            return Some(error_response(
+                msg_id,
+                "invalid :profile (use auto, low, normal, or high)",
+            ))
+        }
+    };
+    match state.vr_state.gpu_power.set_profile(profile) {
+        Ok(()) => Some(ok_response(msg_id)),
+        Err(e) => Some(error_response(msg_id, &e)),
+    }
+}
+
+fn handle_gpu_power_detect(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    state.vr_state.gpu_power.run_detect();
+    let sexp = state.vr_state.gpu_power.to_sexp();
+    Some(format!(
+        "(:type :response :id {} :status :ok :gpu-power {})",
+        msg_id, sexp
+    ))
+}
+
+// ── Beyond HID handlers ────────────────────────────────────
+
+fn handle_beyond_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let sexp = state.vr_state.beyond_hid.status_sexp();
+    Some(format!(
+        "(:type :response :id {} :status :ok :beyond {})",
+        msg_id, sexp
+    ))
+}
+
+fn handle_beyond_detect(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    state.vr_state.beyond_hid.detect();
+    let sexp = state.vr_state.beyond_hid.status_sexp();
+    Some(format!(
+        "(:type :response :id {} :status :ok :beyond {})",
+        msg_id, sexp
+    ))
+}
+
+fn handle_beyond_power_on(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    match state.vr_state.beyond_hid.power_on_display() {
+        Ok(()) => Some(ok_response(msg_id)),
+        Err(e) => Some(error_response(msg_id, &e)),
+    }
+}
+
+fn handle_beyond_set_brightness(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    let pct = match get_int(value, "value") {
+        Some(v) => v as u8,
+        None => return Some(error_response(msg_id, "missing :value (0-100)")),
+    };
+    match state.vr_state.beyond_hid.set_brightness(pct) {
+        Ok(()) => Some(ok_response(msg_id)),
+        Err(e) => Some(error_response(msg_id, &e)),
+    }
+}
+
+fn handle_beyond_set_fan_speed(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    let pct = match get_int(value, "value") {
+        Some(v) => v as u8,
+        None => return Some(error_response(msg_id, "missing :value (40-100)")),
+    };
+    match state.vr_state.beyond_hid.set_fan_speed(pct) {
+        Ok(()) => Some(ok_response(msg_id)),
+        Err(e) => Some(error_response(msg_id, &e)),
+    }
+}
+
+fn handle_beyond_set_led_color(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    let r = match get_int(value, "r") {
+        Some(v) => v as u8,
+        None => return Some(error_response(msg_id, "missing :r (0-255)")),
+    };
+    let g = match get_int(value, "g") {
+        Some(v) => v as u8,
+        None => return Some(error_response(msg_id, "missing :g (0-255)")),
+    };
+    let b = match get_int(value, "b") {
+        Some(v) => v as u8,
+        None => return Some(error_response(msg_id, "missing :b (0-255)")),
+    };
+    match state.vr_state.beyond_hid.set_led_color(r, g, b) {
+        Ok(()) => Some(ok_response(msg_id)),
+        Err(e) => Some(error_response(msg_id, &e)),
+    }
 }
 
 // ── Helpers ────────────────────────────────────────────────

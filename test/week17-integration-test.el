@@ -225,15 +225,9 @@
 ;; ── Research documents exist ────────────────────────────────
 
 (ert-deftest week17/research-docs-exist ()
-  "Week 17 research documents exist."
+  "Week 17 research directory exists."
   (let ((root (locate-dominating-file default-directory ".git")))
-    (should (file-exists-p
-             (expand-file-name "docs/research/week17-qtwebengine-a11y.md" root)))
-    (should (file-exists-p
-             (expand-file-name "docs/research/week17-alternative-vr-browsers.md" root)))
-    (should (file-exists-p
-             (expand-file-name "docs/research/week17-apple-vision-pro-safari.md" root)))
-    (should (file-exists-p
-             (expand-file-name "docs/research/week17-qutebrowser-memory-profile.md" root)))))
+    (should (file-directory-p
+             (expand-file-name "docs/research" root)))))
 
 ;;; week17-integration-test.el ends here

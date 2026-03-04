@@ -20,7 +20,7 @@ full-backend = [    # enables DRM/winit backends (requires libseat, libinput, DR
     "smithay/backend_udev",
     "smithay/backend_winit",
 ]
-vr = ["openxrs"]    # enables OpenXR VR runtime integration
+vr = ["openxrs", "glow", "khronos-egl"]    # enables OpenXR VR runtime + GL rendering
 
 [dependencies]
 smithay = { version = "0.7", default-features = false, features = [
@@ -42,6 +42,8 @@ libc = "0.2"
 
 # VR: OpenXR runtime integration (behind "vr" feature flag)
 openxrs = { package = "openxr", version = "0.21", optional = true }
+glow = { version = "0.16", optional = true }
+khronos-egl = { version = "6", features = ["dynamic"], optional = true }
 
 [dev-dependencies]
 wayland-client = "0.31"

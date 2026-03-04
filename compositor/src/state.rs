@@ -17,14 +17,24 @@ use smithay::{
     utils::Rectangle,
     wayland::{
         compositor::{CompositorClientState, CompositorState},
+        cursor_shape::CursorShapeManagerState,
+        dmabuf::DmabufState,
         foreign_toplevel_list::ForeignToplevelListState,
+        idle_inhibit::IdleInhibitManagerState,
+        idle_notify::IdleNotifierState,
         output::OutputManagerState,
-        selection::data_device::DataDeviceState,
+        selection::{
+            data_device::DataDeviceState,
+            primary_selection::PrimarySelectionState,
+        },
+        session_lock::SessionLockManagerState,
         shell::{
             wlr_layer::WlrLayerShellState,
             xdg::XdgShellState,
         },
+        pointer_constraints::PointerConstraintsState,
         shm::ShmState,
+        xdg_activation::XdgActivationState,
     },
     xwayland::xwm::X11Wm,
     wayland::xwayland_shell::XWaylandShellState,
@@ -37,6 +47,9 @@ use tracing::info;
 
 use crate::autotype::AutoTypeManager;
 use crate::clock::{Clock, SystemClock};
+use crate::handlers::dpms::DpmsState;
+use crate::handlers::output_management::OutputManagementState;
+use crate::handlers::screencopy::ScreencopyState;
 use crate::ipc::IpcServer;
 use crate::secure_input::SecureInputState;
 use crate::vr::VrState;
@@ -125,6 +138,26 @@ pub struct EwwmState {
     // Layer shell
     pub layer_shell_state: WlrLayerShellState,
 
+    // Session lock (ext-session-lock-v1)
+    pub session_lock_state: SessionLockManagerState,
+    pub session_locked: bool,
+
+    // Idle notification + inhibit
+    pub idle_notifier_state: IdleNotifierState<Self>,
+    pub idle_inhibit_state: IdleInhibitManagerState,
+
+    // Primary selection (zwp-primary-selection-v1)
+    pub primary_selection_state: PrimarySelectionState,
+
+    // DMA-BUF (linux-dmabuf-v1)
+    pub dmabuf_state: DmabufState,
+
+    // Cursor shape (wp-cursor-shape-v1)
+    pub cursor_shape_state: CursorShapeManagerState,
+
+    // XDG activation (xdg-activation-v1)
+    pub xdg_activation_state: XdgActivationState,
+
     // Foreign toplevel management
     pub foreign_toplevel_state: ForeignToplevelListState,
 
@@ -168,6 +201,18 @@ pub struct EwwmState {
     pub headless_width: i32,
     pub headless_height: i32,
 
+    // DPMS output power state
+    pub dpms_state: DpmsState,
+
+    // Screencopy (wlr-screencopy-unstable-v1)
+    pub screencopy_state: ScreencopyState,
+
+    // Output management (wlr-output-management-unstable-v1)
+    pub output_management_state: OutputManagementState,
+
+    // Pointer constraints (pointer-constraints-unstable-v1)
+    pub pointer_constraints_state: PointerConstraintsState,
+
     // Focus tracking
     pub focused_surface: Option<u64>,
 
@@ -209,15 +254,44 @@ impl EwwmState {
         // Layer shell protocol
         let layer_shell_state = WlrLayerShellState::new::<Self>(&display_handle);
 
+        // Session lock protocol (ext-session-lock-v1)
+        let session_lock_state =
+            SessionLockManagerState::new::<Self, _>(&display_handle, |_| true);
+
+        // Idle notification (ext-idle-notify-v1)
+        let idle_notifier_state =
+            IdleNotifierState::new(&display_handle, loop_handle.clone());
+
+        // Idle inhibit (zwp-idle-inhibit-v1)
+        let idle_inhibit_state = IdleInhibitManagerState::new::<Self>(&display_handle);
+
+        // Primary selection (zwp-primary-selection-v1)
+        let primary_selection_state = PrimarySelectionState::new::<Self>(&display_handle);
+
+        // DMA-BUF (linux-dmabuf-v1) — state only, global created when renderer is available
+        let dmabuf_state = DmabufState::new();
+
+        // Cursor shape (wp-cursor-shape-v1)
+        let cursor_shape_state = CursorShapeManagerState::new::<Self>(&display_handle);
+
+        // XDG activation (xdg-activation-v1)
+        let xdg_activation_state = XdgActivationState::new::<Self>(&display_handle);
+
         // Foreign toplevel list protocol
         let foreign_toplevel_state = ForeignToplevelListState::new::<Self>(&display_handle);
 
         // XWayland shell protocol (for surface serial matching)
         let xwayland_shell_state = XWaylandShellState::new::<Self>(&display_handle);
 
+        // Pointer constraints (pointer-constraints-unstable-v1)
+        let pointer_constraints_state =
+            PointerConstraintsState::new::<Self>(&display_handle);
+
         let seat = seat_state.new_wl_seat(&display_handle, "ewwm-seat");
 
-        info!("EwwmState initialized (with layer-shell, foreign-toplevel, xwayland-shell)");
+        info!("EwwmState initialized (layer-shell, foreign-toplevel, xwayland-shell, \
+               session-lock, idle-notify, idle-inhibit, primary-selection, dmabuf, \
+               cursor-shape, xdg-activation, pointer-constraints)");
 
         let ipc_socket_path = IpcServer::default_socket_path();
 
@@ -231,6 +305,14 @@ impl EwwmState {
             seat_state,
             data_device_state,
             layer_shell_state,
+            session_lock_state,
+            session_locked: false,
+            idle_notifier_state,
+            idle_inhibit_state,
+            primary_selection_state,
+            dmabuf_state,
+            cursor_shape_state,
+            xdg_activation_state,
             foreign_toplevel_state,
             xwm: None,
             xwayland_shell_state,
@@ -251,6 +333,10 @@ impl EwwmState {
             headless_output_count: 0,
             headless_width: 1920,
             headless_height: 1080,
+            dpms_state: DpmsState::default(),
+            screencopy_state: ScreencopyState::new(),
+            output_management_state: OutputManagementState::new(),
+            pointer_constraints_state,
             focused_surface: None,
             cursor_status: CursorImageStatus::Default,
             running: true,

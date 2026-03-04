@@ -5,6 +5,7 @@
 
 pub mod autotype;
 pub mod clock;
+pub mod config;
 pub mod input_source;
 pub mod backend;
 pub(crate) mod handlers;

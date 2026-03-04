@@ -20,13 +20,18 @@ concurrency:
 jobs:
   build:
     name: Nix Build
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_SELFHOSTED == 'true' && 'tinyland-nix' || 'ubuntu-latest' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
-      - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: cachix/install-nix-action@v30
+      - uses: ryanccn/attic-action@v0
+        if: env.ATTIC_SERVER != ''
+        with:
+          endpoint: ${{ env.ATTIC_SERVER }}
+          cache: ${{ env.ATTIC_CACHE }}
+          token: ${{ secrets.ATTIC_TOKEN }}
 
       - name: Check flake
         run: nix flake check --no-build
@@ -39,3 +44,8 @@ jobs:
 
       - name: Build devShell
         run: nix build .#devShells.x86_64-linux.default
+
+      - name: Push to Attic cache
+        if: env.ATTIC_SERVER != '' && github.event_name == 'push'
+        run: |
+          attic push "$ATTIC_CACHE" result result-1 result-2 2>/dev/null || true

@@ -6,8 +6,9 @@ ConditionPathExists=/dev/openbci
 PartOf=exwm-vr.target
 
 [Service]
-Type=simple
-ExecStart=/opt/exwm-vr/bci-venv/bin/python -m ewwm_brainflow_daemon
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/usr/bin/true
 
 [Install]
 WantedBy=exwm-vr.target

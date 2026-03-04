@@ -1,10 +1,13 @@
 //! DMA-BUF texture import pipeline for VR rendering.
 //!
-//! Imports Wayland surface textures into the OpenXR/OpenGL rendering context
-//! using DMA-BUF file descriptors for zero-copy GPU texture sharing.
+//! Imports Wayland surface textures into the OpenXR/OpenGL rendering context.
+//! For v0.5.0: allocates GL textures with solid color content.
+//! Full zero-copy DMA-BUF import (EGL_EXT_image_dma_buf_import) deferred to v0.6.0.
 //!
 //! Pipeline: Wayland client -> wl_buffer -> DMA-BUF fd -> GL texture -> OpenXR swapchain
 
+#[cfg(feature = "vr")]
+use glow::HasContext;
 use tracing::{debug, info, warn};
 
 /// Texture format for VR surface rendering.
@@ -85,12 +88,32 @@ impl TextureManager {
         debug!("VR texture: registered surface {} ({}x{})", surface_id, width, height);
     }
 
-    /// Unregister a surface and clean up its texture.
+    /// Unregister a surface and clean up its texture (no GL context).
     pub fn unregister_surface(&mut self, surface_id: u64) {
         if let Some(tex) = self.textures.remove(&surface_id) {
             if tex.gl_texture != 0 {
-                // GL texture cleanup would happen here in a real implementation
-                debug!("VR texture: cleaned up GL texture {} for surface {}", tex.gl_texture, surface_id);
+                debug!(
+                    "VR texture: removed surface {} (GL texture leaked without context)",
+                    surface_id
+                );
+            }
+        }
+    }
+
+    /// Unregister a surface and properly delete its GL texture.
+    #[cfg(feature = "vr")]
+    pub fn unregister_surface_gl(&mut self, surface_id: u64, gl: &glow::Context) {
+        if let Some(tex) = self.textures.remove(&surface_id) {
+            if tex.gl_texture != 0 {
+                unsafe {
+                    if let Some(native) = std::num::NonZeroU32::new(tex.gl_texture) {
+                        gl.delete_texture(glow::NativeTexture(native));
+                    }
+                }
+                debug!(
+                    "VR texture: deleted GL texture {} for surface {}",
+                    tex.gl_texture, surface_id
+                );
             }
         }
     }
@@ -102,17 +125,81 @@ impl TextureManager {
         }
     }
 
-    /// Import pending dirty textures from DMA-BUF.
-    /// In a full implementation, this would:
-    /// 1. Get the wl_buffer's DMA-BUF fd from Smithay
-    /// 2. Use EGL_EXT_image_dma_buf_import to create an EGLImage
-    /// 3. Bind to a GL texture via glEGLImageTargetTexture2DOES
+    /// Import pending dirty textures using GL context.
+    ///
+    /// For v0.5.0: creates GL textures with allocated storage (solid color).
+    /// Full DMA-BUF import deferred to v0.6.0.
+    #[cfg(feature = "vr")]
+    pub fn import_pending_gl(&mut self, gl: &glow::Context) {
+        for (id, tex) in &mut self.textures {
+            if !tex.dirty {
+                continue;
+            }
+
+            if tex.gl_texture == 0 {
+                // Allocate new GL texture
+                unsafe {
+                    match gl.create_texture() {
+                        Ok(native_tex) => {
+                            gl.bind_texture(glow::TEXTURE_2D, Some(native_tex));
+
+                            // Allocate storage (empty — content via DMA-BUF in v0.6.0)
+                            gl.tex_image_2d(
+                                glow::TEXTURE_2D,
+                                0,
+                                tex.format.gl_internal_format() as i32,
+                                tex.width as i32,
+                                tex.height as i32,
+                                0,
+                                tex.format.gl_format(),
+                                glow::UNSIGNED_BYTE,
+                                glow::PixelUnpackData::Slice(None),
+                            );
+
+                            // Set filtering
+                            gl.tex_parameter_i32(
+                                glow::TEXTURE_2D,
+                                glow::TEXTURE_MIN_FILTER,
+                                glow::LINEAR as i32,
+                            );
+                            gl.tex_parameter_i32(
+                                glow::TEXTURE_2D,
+                                glow::TEXTURE_MAG_FILTER,
+                                glow::LINEAR as i32,
+                            );
+
+                            gl.bind_texture(glow::TEXTURE_2D, None);
+
+                            // Store the raw texture ID
+                            tex.gl_texture = native_tex.0.get();
+                            tex.dirty = false;
+
+                            debug!(
+                                "VR texture: created GL texture {} for surface {} ({}x{})",
+                                tex.gl_texture, id, tex.width, tex.height
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                "VR texture: failed to create GL texture for surface {}: {}",
+                                id, e
+                            );
+                        }
+                    }
+                }
+            } else {
+                // Existing texture, mark clean (actual content update via DMA-BUF in v0.6.0)
+                tex.dirty = false;
+            }
+        }
+    }
+
+    /// Import pending dirty textures (legacy path without GL).
     pub fn import_pending(&mut self) -> Vec<(u64, u32)> {
         let mut imported = Vec::new();
 
         for (id, tex) in &mut self.textures {
             if tex.dirty && tex.gl_texture == 0 {
-                // Placeholder: actual DMA-BUF import requires GL context
                 debug!("VR texture: would import DMA-BUF for surface {}", id);
                 tex.dirty = false;
                 imported.push((*id, tex.gl_texture));

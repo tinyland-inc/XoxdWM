@@ -46,7 +46,7 @@
                                   (locate-dominating-file default-directory ".git"))))
     (with-temp-buffer
       (insert-file-contents cargo)
-      (should (search-forward "vr = [\"openxrs\"]" nil t)))))
+      (should (search-forward "vr = [" nil t)))))
 
 (ert-deftest week7-integration/cargo-has-openxrs-dep ()
   "Cargo.toml has openxrs optional dependency."

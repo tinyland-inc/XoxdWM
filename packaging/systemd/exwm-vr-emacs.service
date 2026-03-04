@@ -9,7 +9,12 @@ PartOf=exwm-vr.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/emacs --fg-daemon=exwm-vr -l ewwm
-Environment=WAYLAND_DISPLAY=wayland-1
+Environment=QT_QPA_PLATFORM=wayland
+Environment=MOZ_ENABLE_WAYLAND=1
+Environment=_JAVA_AWT_WM_NONREPARENTING=1
+Environment=GDK_BACKEND=wayland,x11
+Environment=XCURSOR_THEME=Adwaita
+Environment=XCURSOR_SIZE=24
 
 [Install]
 WantedBy=exwm-vr.target

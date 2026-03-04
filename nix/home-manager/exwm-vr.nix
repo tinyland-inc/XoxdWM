@@ -196,7 +196,7 @@ in {
     emacs = {
       package = lib.mkOption {
         type = lib.types.package;
-        default = pkgs.emacs-pgtk or pkgs.emacs;
+        default = pkgs.emacs-pgtk;
         defaultText = lib.literalExpression "pkgs.emacs-pgtk";
         description = "Emacs package to use.";
       };
@@ -231,12 +231,31 @@ in {
   };
 
   config = lib.mkIf cfg.enable (lib.mkMerge [
-    # Always: generate config.el, qutebrowser theme, env var
+    # Always: generate config.el, qutebrowser theme, env vars, portal config
     {
       xdg.configFile."exwm-vr/config.el".text = configEl;
       xdg.configFile."qutebrowser/exwm-vr-theme.py".text = qutebrowserTheme cfg.theme;
+
+      # Portal backend config for screen sharing, file chooser, etc.
+      xdg.configFile."xdg-desktop-portal/exwm-vr-portals.conf".text = ''
+        [preferred]
+        default=gtk
+        org.freedesktop.impl.portal.ScreenCast=wlr
+        org.freedesktop.impl.portal.Screenshot=wlr
+        org.freedesktop.impl.portal.Inhibit=none
+      '';
+
       home.sessionVariables = {
         EXWM_VR_CONFIG_DIR = cfg.configDir;
+        XDG_CURRENT_DESKTOP = "EXWM-VR";
+        XDG_SESSION_TYPE = "wayland";
+        QT_QPA_PLATFORM = "wayland";
+        MOZ_ENABLE_WAYLAND = "1";
+        _JAVA_AWT_WM_NONREPARENTING = "1";
+        GDK_BACKEND = "wayland,x11";
+        SDL_VIDEODRIVER = "wayland";
+        XCURSOR_THEME = "Adwaita";
+        XCURSOR_SIZE = "24";
       };
     }
 
@@ -271,7 +290,6 @@ in {
           Unit = {
             Description = "EWWM Wayland Compositor";
             Documentation = "https://github.com/Jesssullivan/XoxdWM";
-            ConditionEnvironment = "WAYLAND_DISPLAY";
           };
           Service = {
             ExecStart = "${compositorBin} ${compositorArgs}";
