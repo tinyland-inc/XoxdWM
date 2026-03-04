@@ -339,6 +339,181 @@ cmd_gpu_tools() {
     echo "=== GPU tools installed ==="
 }
 
+cmd_sway_setup() {
+    _need_root
+    local user
+    user=$(_check_user)
+
+    echo "=== Sway Host Compositor Setup ==="
+    echo "  Building sway 1.11 (wlroots) for VR development."
+    echo "  Sway manages the desktop monitor; VR HMD is DRM-leased to Monado."
+    echo
+
+    # Disable broken third-party repos that block dnf
+    for repo in runner_gitlab-runner runner_gitlab-runner-source tailscale-stable; do
+        dnf config-manager --disable "$repo" 2>/dev/null || true
+    done
+
+    # Build dependencies
+    echo "[1/5] Installing build dependencies..."
+    dnf install -y \
+        wlroots-devel wayland-devel wayland-protocols-devel \
+        libinput-devel pixman-devel mesa-libEGL-devel mesa-libGLES-devel \
+        libdrm-devel json-c-devel pango-devel cairo-devel pcre2-devel \
+        meson ninja-build gcc scdoc \
+        seatd xorg-x11-server-Xwayland foot wmenu 2>&1 | tail -5
+    echo
+
+    # Enable and start seatd
+    echo "[2/5] Configuring seatd..."
+    systemctl enable --now seatd.service 2>/dev/null || true
+    usermod -aG seat "$user" 2>/dev/null || true
+    echo "  seatd: $(systemctl is-active seatd.service 2>/dev/null || echo 'not running')"
+    echo
+
+    # Build sway
+    local sway_ver="1.11"
+    local build_dir="/tmp/sway-build"
+    echo "[3/5] Building sway $sway_ver..."
+    if command -v sway >/dev/null 2>&1; then
+        local cur_ver
+        cur_ver=$(sway --version 2>/dev/null | grep -oP '[\d.]+' | head -1)
+        echo "  sway already installed: $cur_ver"
+        if [ "$cur_ver" = "$sway_ver" ]; then
+            echo "  Skipping build (already at $sway_ver)"
+        else
+            echo "  Upgrading from $cur_ver to $sway_ver"
+        fi
+    fi
+
+    if ! command -v sway >/dev/null 2>&1 || [ "$(sway --version 2>/dev/null | grep -oP '[\d.]+' | head -1)" != "$sway_ver" ]; then
+        rm -rf "$build_dir"
+        git clone --depth 1 --branch "$sway_ver" \
+            https://github.com/swaywm/sway.git "$build_dir" 2>&1 | tail -1
+        cd "$build_dir"
+        meson setup build --prefix=/usr/local -Dbuildtype=release 2>&1 | tail -3
+        ninja -C build -j"$(nproc)" 2>&1 | tail -3
+        ninja -C build install 2>&1 | tail -3
+        cd /
+        rm -rf "$build_dir"
+        echo "  Installed: $(sway --version 2>/dev/null || echo 'ERROR')"
+    fi
+    echo
+
+    # Install config
+    echo "[4/5] Installing sway config..."
+    local cfg_dir="/home/$user/.config/sway"
+    mkdir -p "$cfg_dir"
+    local cfg_src="$SCRIPT_DIR/../sway/config"
+    [ ! -f "$cfg_src" ] && cfg_src="$PROJECT_ROOT/packaging/sway/config"
+    [ ! -f "$cfg_src" ] && cfg_src="/tmp/exwm-sway-config"
+    if [ -f "$cfg_src" ]; then
+        cp "$cfg_src" "$cfg_dir/config"
+        chown -R "$user:$user" "$cfg_dir"
+        echo "  Installed: $cfg_dir/config"
+    else
+        echo "  WARNING: sway config template not found"
+    fi
+    echo
+
+    # Verify
+    echo "[5/5] Verifying..."
+    echo "  sway: $(command -v sway 2>/dev/null || echo 'NOT FOUND')"
+    echo "  seatd: $(systemctl is-active seatd.service 2>/dev/null)"
+    echo "  Xwayland: $(command -v Xwayland 2>/dev/null || echo 'NOT FOUND')"
+    echo "  foot: $(command -v foot 2>/dev/null || echo 'NOT FOUND')"
+    echo
+    echo "=== Sway setup complete ==="
+    echo "  Start from TTY: sway"
+    echo "  Then run Steam: flatpak run com.valvesoftware.Steam"
+}
+
+cmd_monado_setup() {
+    _need_root
+    local user
+    user=$(_check_user)
+
+    echo "=== Monado OpenXR Runtime Setup ==="
+    echo
+
+    # Disable broken repos
+    for repo in runner_gitlab-runner runner_gitlab-runner-source tailscale-stable; do
+        dnf config-manager --disable "$repo" 2>/dev/null || true
+    done
+
+    # Build dependencies
+    echo "[1/4] Installing build dependencies..."
+    dnf install -y \
+        cmake ninja-build gcc-c++ \
+        eigen3-devel libusb1-devel libuvc-devel \
+        mesa-libEGL-devel mesa-libGL-devel mesa-vulkan-drivers vulkan-headers vulkan-loader-devel \
+        wayland-devel wayland-protocols-devel libdrm-devel \
+        hidapi-devel libXrandr-devel glslang glslang-devel \
+        spirv-tools spirv-tools-devel opencv-devel libudev-devel 2>&1 | tail -5
+    echo
+
+    # Build Monado
+    local build_dir="/tmp/monado-build"
+    echo "[2/4] Building Monado..."
+    if [ -f /usr/local/bin/monado-cli ]; then
+        echo "  Monado already installed at /usr/local/bin/monado-cli"
+        echo "  Rebuilding to ensure latest version..."
+    fi
+    rm -rf "$build_dir"
+    git clone --depth 1 \
+        https://gitlab.freedesktop.org/monado/monado.git "$build_dir" 2>&1 | tail -1
+    cd "$build_dir"
+    cmake -B build -G Ninja \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DXRT_BUILD_DRIVER_STEAMVR_LIGHTHOUSE=ON 2>&1 | tail -5
+    ninja -C build -j"$(nproc)" 2>&1 | tail -3
+    ninja -C build install 2>&1 | tail -3
+    cd /
+    rm -rf "$build_dir"
+    echo
+
+    # Set capabilities
+    echo "[3/4] Setting capabilities..."
+    if [ -f /usr/local/bin/monado-service ]; then
+        setcap CAP_SYS_NICE=eip /usr/local/bin/monado-service
+        echo "  CAP_SYS_NICE set on monado-service"
+    fi
+    echo
+
+    # Install Monado environment config
+    echo "[4/4] Installing Monado configuration..."
+    local monado_cfg="/home/$user/.config/monado"
+    mkdir -p "$monado_cfg"
+    cat > "$monado_cfg/env" << 'ENVEOF'
+# Monado environment for Bigscreen Beyond under Sway
+# Source this before running monado-service or monado-cli.
+
+# Force Wayland DRM lease target (not X11, not direct)
+export XRT_COMPOSITOR_FORCE_WAYLAND=1
+
+# Request lease of the Beyond HMD connector
+export XRT_COMPOSITOR_WAYLAND_CONNECTOR=DP-2
+
+# Enable SteamVR Lighthouse driver (for Beyond tracking)
+export STEAMVR_LH_ENABLE=1
+
+# Compute compositor (required for some AMD configurations)
+export XRT_COMPOSITOR_COMPUTE=1
+
+# IPD override (Beyond 2e has mechanical IPD, but Monado needs a hint)
+export LH_OVERRIDE_IPD_MM=64
+ENVEOF
+    chown -R "$user:$user" "$monado_cfg"
+    echo "  Installed: $monado_cfg/env"
+    echo "  Usage: source ~/.config/monado/env && monado-service"
+    echo
+
+    echo "=== Monado setup complete ==="
+    echo "  Probe: monado-cli probe"
+    echo "  Service: source ~/.config/monado/env && monado-service"
+}
+
 cmd_beyond_power_on() {
     echo "=== Beyond Display Power-On ==="
     local script
@@ -369,6 +544,8 @@ usage() {
     echo "Commands:"
     echo "  prereqs          Install groups, udev rules, check firmware (sudo)"
     echo "  kernel-upgrade   Install ELRepo kernel-ml + firmware (sudo)"
+    echo "  sway-setup       Build + install sway host compositor (sudo)"
+    echo "  monado-setup     Build + install Monado OpenXR runtime (sudo)"
     echo "  verify           Verify display, DRM, USB, permissions"
     echo "  beyond-status    Quick Beyond 2e status"
     echo "  beyond-hid-test  Test HID device access"
@@ -386,6 +563,8 @@ case "${1:-}" in
     verify)         shift; cmd_verify "$@" ;;
     beyond-status)  shift; cmd_beyond_status "$@" ;;
     beyond-hid-test) shift; cmd_beyond_hid_test "$@" ;;
+    sway-setup)     shift; cmd_sway_setup "$@" ;;
+    monado-setup)   shift; cmd_monado_setup "$@" ;;
     beyond-power-on) shift; cmd_beyond_power_on "$@" ;;
     gpu-tools)      shift; cmd_gpu_tools "$@" ;;
     full-setup)     shift; cmd_full_setup "$@" ;;

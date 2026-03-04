@@ -158,15 +158,15 @@ setup_script := project_root + "/packaging/scripts/exwm-vr-setup"
 [group('vr')]
 beyond-remote host command:
     @echo "=== {{host}}: {{command}} ==="
-    scp -q "{{setup_script}}" "{{project_root}}/packaging/udev/99-exwm-vr.rules" "{{project_root}}/packaging/udev/98-bigscreen-non-desktop.rules" "{{project_root}}/packaging/scripts/beyond-power-on" "{{project_root}}/packaging/systemd/exwm-vr-beyond-power.service" jess@{{host}}:/tmp/
-    ssh jess@{{host}} "chmod +x /tmp/exwm-vr-setup /tmp/beyond-power-on && /tmp/exwm-vr-setup {{command}}"
+    scp -q "{{setup_script}}" "{{project_root}}/packaging/udev/99-exwm-vr.rules" "{{project_root}}/packaging/udev/98-bigscreen-non-desktop.rules" "{{project_root}}/packaging/scripts/beyond-power-on" "{{project_root}}/packaging/systemd/exwm-vr-beyond-power.service" "{{project_root}}/packaging/sway/config" jess@{{host}}:/tmp/
+    ssh jess@{{host}} "chmod +x /tmp/exwm-vr-setup /tmp/beyond-power-on && mv -f /tmp/config /tmp/exwm-sway-config 2>/dev/null; /tmp/exwm-vr-setup {{command}}"
 
 # Same as beyond-remote but wraps in sudo (prompts for password).
 [group('vr')]
 beyond-remote-sudo host command:
     @echo "=== {{host}}: sudo {{command}} ==="
-    scp -q "{{setup_script}}" "{{project_root}}/packaging/udev/99-exwm-vr.rules" "{{project_root}}/packaging/udev/98-bigscreen-non-desktop.rules" "{{project_root}}/packaging/scripts/beyond-power-on" "{{project_root}}/packaging/systemd/exwm-vr-beyond-power.service" jess@{{host}}:/tmp/
-    ssh jess@{{host}} "chmod +x /tmp/exwm-vr-setup /tmp/beyond-power-on && echo 'Running with sudo...' && sudo /tmp/exwm-vr-setup {{command}}"
+    scp -q "{{setup_script}}" "{{project_root}}/packaging/udev/99-exwm-vr.rules" "{{project_root}}/packaging/udev/98-bigscreen-non-desktop.rules" "{{project_root}}/packaging/scripts/beyond-power-on" "{{project_root}}/packaging/systemd/exwm-vr-beyond-power.service" "{{project_root}}/packaging/sway/config" jess@{{host}}:/tmp/
+    ssh jess@{{host}} "chmod +x /tmp/exwm-vr-setup /tmp/beyond-power-on && mv -f /tmp/config /tmp/exwm-sway-config 2>/dev/null; echo 'Running with sudo...' && sudo /tmp/exwm-vr-setup {{command}}"
 
 # Shorthand aliases for common operations
 [group('vr')]
@@ -195,6 +195,16 @@ beyond-gpu-tools host="honey":
 beyond-power-on host="honey" *args="":
     @echo "Sending Beyond power-on on {{host}}..."
     just beyond-remote {{host}} beyond-power-on {{args}}
+
+[group('vr')]
+beyond-sway-setup host="honey":
+    @echo "Building sway host compositor on {{host}} (sudo required)..."
+    just beyond-remote-sudo {{host}} sway-setup
+
+[group('vr')]
+beyond-monado-setup host="honey":
+    @echo "Building Monado on {{host}} (sudo required)..."
+    just beyond-remote-sudo {{host}} monado-setup
 
 # ── dev ────────────────────────────────────────────────
 
