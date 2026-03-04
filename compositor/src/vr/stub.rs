@@ -18,6 +18,7 @@ use super::link_hints::LinkHintState;
 use super::scene::VrScene;
 use super::bci_state::BciState;
 use super::follow_mode::FollowMode;
+use super::beyond_hid::BeyondHidManager;
 use super::gpu_power::GpuPowerState;
 use super::overlay::OverlayManager;
 use super::radial_menu::RadialMenu;
@@ -52,6 +53,7 @@ pub struct VrState {
     pub virtual_keyboard: VirtualKeyboardState,
     pub bci: BciState,
     pub follow_mode: FollowMode,
+    pub beyond_hid: BeyondHidManager,
     pub gpu_power: GpuPowerState,
     pub transient_chains: TransientChainManager,
     pub overlay_manager: OverlayManager,
@@ -78,6 +80,7 @@ impl Default for VrState {
             virtual_keyboard: VirtualKeyboardState::new(),
             bci: BciState::new(),
             follow_mode: FollowMode::new(),
+            beyond_hid: BeyondHidManager::new(),
             gpu_power: GpuPowerState::new(),
             transient_chains: TransientChainManager::new(),
             overlay_manager: OverlayManager::new(),

@@ -53,3 +53,4 @@ pub mod transient_3d;
 pub mod overlay;
 pub mod radial_menu;
 pub mod capture_visibility;
+pub mod beyond_hid;

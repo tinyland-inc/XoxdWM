@@ -221,6 +221,13 @@ pub fn handle_message(state: &mut EwwmState, client_id: u64, raw: &str) -> Optio
         Some("gpu-power-status") => handle_gpu_power_status(state, msg_id),
         Some("gpu-power-set-profile") => handle_gpu_power_set_profile(state, msg_id, &value),
         Some("gpu-power-detect") => handle_gpu_power_detect(state, msg_id),
+        // Bigscreen Beyond HID control
+        Some("beyond-status") => handle_beyond_status(state, msg_id),
+        Some("beyond-detect") => handle_beyond_detect(state, msg_id),
+        Some("beyond-power-on") => handle_beyond_power_on(state, msg_id),
+        Some("beyond-set-brightness") => handle_beyond_set_brightness(state, msg_id, &value),
+        Some("beyond-set-fan-speed") => handle_beyond_set_fan_speed(state, msg_id, &value),
+        Some("beyond-set-led-color") => handle_beyond_set_led_color(state, msg_id, &value),
         Some(other) => Some(error_response(
             msg_id,
             &format!("unknown message type: {other}"),
@@ -3031,6 +3038,85 @@ fn handle_gpu_power_detect(state: &mut EwwmState, msg_id: i64) -> Option<String>
         "(:type :response :id {} :status :ok :gpu-power {})",
         msg_id, sexp
     ))
+}
+
+// ── Beyond HID handlers ────────────────────────────────────
+
+fn handle_beyond_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let sexp = state.vr_state.beyond_hid.status_sexp();
+    Some(format!(
+        "(:type :response :id {} :status :ok :beyond {})",
+        msg_id, sexp
+    ))
+}
+
+fn handle_beyond_detect(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    state.vr_state.beyond_hid.detect();
+    let sexp = state.vr_state.beyond_hid.status_sexp();
+    Some(format!(
+        "(:type :response :id {} :status :ok :beyond {})",
+        msg_id, sexp
+    ))
+}
+
+fn handle_beyond_power_on(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    match state.vr_state.beyond_hid.power_on_display() {
+        Ok(()) => Some(ok_response(msg_id)),
+        Err(e) => Some(error_response(msg_id, &e)),
+    }
+}
+
+fn handle_beyond_set_brightness(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    let pct = match get_int(value, "value") {
+        Some(v) => v as u8,
+        None => return Some(error_response(msg_id, "missing :value (0-100)")),
+    };
+    match state.vr_state.beyond_hid.set_brightness(pct) {
+        Ok(()) => Some(ok_response(msg_id)),
+        Err(e) => Some(error_response(msg_id, &e)),
+    }
+}
+
+fn handle_beyond_set_fan_speed(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    let pct = match get_int(value, "value") {
+        Some(v) => v as u8,
+        None => return Some(error_response(msg_id, "missing :value (40-100)")),
+    };
+    match state.vr_state.beyond_hid.set_fan_speed(pct) {
+        Ok(()) => Some(ok_response(msg_id)),
+        Err(e) => Some(error_response(msg_id, &e)),
+    }
+}
+
+fn handle_beyond_set_led_color(
+    state: &mut EwwmState,
+    msg_id: i64,
+    value: &Value,
+) -> Option<String> {
+    let r = match get_int(value, "r") {
+        Some(v) => v as u8,
+        None => return Some(error_response(msg_id, "missing :r (0-255)")),
+    };
+    let g = match get_int(value, "g") {
+        Some(v) => v as u8,
+        None => return Some(error_response(msg_id, "missing :g (0-255)")),
+    };
+    let b = match get_int(value, "b") {
+        Some(v) => v as u8,
+        None => return Some(error_response(msg_id, "missing :b (0-255)")),
+    };
+    match state.vr_state.beyond_hid.set_led_color(r, g, b) {
+        Ok(()) => Some(ok_response(msg_id)),
+        Err(e) => Some(error_response(msg_id, &e)),
+    }
 }
 
 // ── Helpers ────────────────────────────────────────────────
