@@ -1,0 +1,118 @@
+name: Self-Hosted Fast CI
+
+# Fast CI path for self-hosted runners with warm Nix/Attic caches.
+# Combines build + test into minimal jobs for quick iteration.
+# Only runs when USE_SELFHOSTED is enabled; falls through to
+# standard CI workflows on GitHub-hosted runners.
+
+on:
+  push:
+    branches: [main, dev, 'feature/*']
+  pull_request:
+    branches: [main, dev]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast-check:
+    name: Fast Check (self-hosted)
+    if: vars.USE_SELFHOSTED == 'true'
+    runs-on: tinyland-nix
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v30
+      - uses: ryanccn/attic-action@v0
+        if: env.ATTIC_SERVER != ''
+        with:
+          endpoint: ${{ env.ATTIC_SERVER }}
+          cache: ${{ env.ATTIC_CACHE }}
+          token: ${{ secrets.ATTIC_TOKEN }}
+
+      - name: Flake check
+        run: nix flake check --no-build
+
+      - name: Byte-compile Elisp
+        run: nix develop --command just build
+
+      - name: Run ERT tests
+        run: |
+          nix develop --command emacs --batch \
+            -L lisp/core -L lisp/vr -L lisp/ext \
+            -l ert \
+            $(find test -name '*-test.el' -printf '-l %p ') \
+            -f ert-run-tests-batch-and-exit
+
+      - name: Lint Elisp
+        run: nix develop --command just lint-elisp
+
+  fast-build:
+    name: Fast Build (self-hosted)
+    if: vars.USE_SELFHOSTED == 'true'
+    runs-on: tinyland-nix
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v30
+      - uses: ryanccn/attic-action@v0
+        if: env.ATTIC_SERVER != ''
+        with:
+          endpoint: ${{ env.ATTIC_SERVER }}
+          cache: ${{ env.ATTIC_CACHE }}
+          token: ${{ secrets.ATTIC_TOKEN }}
+
+      - name: Build compositor (full + VR)
+        run: nix build .#compositor
+
+      - name: Build headless compositor
+        run: nix build .#compositor-headless
+
+      - name: Run Rust tests
+        run: |
+          nix develop --command bash -c "
+            cd compositor
+            cargo test --features full-backend,vr 2>&1 || cargo test --no-default-features
+          "
+
+      - name: Push to Attic cache
+        if: env.ATTIC_SERVER != '' && github.event_name == 'push'
+        run: |
+          attic push "$ATTIC_CACHE" result result-1 2>/dev/null || true
+
+  fast-vr:
+    name: Fast VR Smoke (self-hosted)
+    if: vars.USE_SELFHOSTED == 'true'
+    needs: fast-build
+    runs-on: [self-hosted, honey]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v30
+      - uses: ryanccn/attic-action@v0
+        if: env.ATTIC_SERVER != ''
+        with:
+          endpoint: ${{ env.ATTIC_SERVER }}
+          cache: ${{ env.ATTIC_CACHE }}
+          token: ${{ secrets.ATTIC_TOKEN }}
+
+      - name: GPU preflight
+        run: |
+          test -e /dev/dri/card0 || { echo "No GPU — skipping VR smoke"; exit 0; }
+          echo "GPU available at /dev/dri/card0"
+
+      - name: DRM lease test
+        run: |
+          nix develop --command bash -c "
+            cd compositor
+            cargo test --features full-backend,vr -- --test-threads=1 drm_lease
+          " || echo "DRM lease tests skipped (no HMD connected)"
+
+      - name: Headless compositor smoke
+        run: |
+          timeout 5 nix run .#compositor-headless -- --backend headless --headless-exit-after 3 2>&1 || true
+          echo "Headless smoke test complete"

@@ -2904,7 +2904,7 @@ fn handle_vr_radial_configure(
     // encoded by the Elisp side as a single configure message.
     // The items are sent as serialized pairs in the s-expression.
     // We rebuild the item list from scratch.
-    if let Some(items_raw) = get_keyword(value, "items") {
+    if let Some(_items_raw) = get_keyword(value, "items") {
         // Simple fallback: items are not easily parsed from the raw keyword.
         // Instead, we accept them as a sequence of id-N / label-N keys.
         debug!("radial-configure: items field present (raw parse)");

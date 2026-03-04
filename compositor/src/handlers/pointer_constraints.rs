@@ -25,8 +25,7 @@ impl PointerConstraintsHandler for EwwmState {
             constraint
                 .map(|c| if c.is_active() { "active" } else { "pending" })
                 .unwrap_or("unknown")
-        })
-        .unwrap_or("unknown");
+        });
 
         info!(
             ?surface,
