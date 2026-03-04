@@ -10,7 +10,10 @@
 | Valve Tundra Tracker | 28de:2300 | Body tracker | Detected |
 | AMD RX 9070 XT | PCI 0x7550 | Navi 48 / GFX1201 | amdgpu loaded, RADV working |
 
-**Display link: NOT connected** — all DP connectors show `disconnected`, no EDID.
+**Display link: PARTIALLY WORKING** — DP-2 shows `connected` with modes
+(including native 5088x2544), EDID present (manufacturer "BIG" product 0x1234).
+However, CRTC management fails with `optc401_disable_crtc` timeout (kernel 6.12 bug).
+The `non_desktop` flag is unset (upstream quirk not merged).
 
 ---
 
@@ -312,13 +315,22 @@ Eventually replace all Proton/Steam dependencies with native tools:
 
 ### Critical: Kernel 6.12 Is Insufficient for RDNA 4 Display
 
-The SMU version mismatch (`smu driver if version = 0x2e, smu fw if version = 0x32`)
-is **not cosmetic** — it means the kernel's SMU interface tables are outdated for
-the GPU firmware. This can cause:
-- Display engine (DCN 4.0.1) never initializing
-- GPU staying in BACO (Bus Active, Chip Off) power state
-- DP link training never starting
-- All connectors showing "disconnected" (exactly our symptom)
+**Updated diagnosis:** The DP link IS working — card1-DP-2 shows `connected` with
+modes including the Beyond's native 5088x2544. EDID is being read (manufacturer
+"BIG" product 0x1234). However, CRTC management fails:
+
+```
+[drm] REG_WAIT timeout 1us * 150000 tries - optc401_disable_crtc line:230
+[drm] Cannot find any crtc or sizes
+```
+
+This is a known kernel 6.12 + RDNA 4 (DCN 4.0.1) bug where the OPP Timing
+Controller cannot properly manage display timing. The SMU version mismatch
+(`smu driver if version = 0x2e, smu fw if version = 0x32`) compounds the
+issue — the kernel's SMU interface tables are outdated. Together these cause:
+- CRTC initialization timeout (optc401)
+- Display engine cannot assign CRTCs to connectors
+- `non_desktop` flag never populated from EDID quirk database
 
 Users on kernel 6.12 with Navi 48 report firmware loading errors (-19/ENODEV).
 Kernel 6.13.5 is the community-established minimum for reliable RX 9070 operation.
