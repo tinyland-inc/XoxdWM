@@ -166,7 +166,7 @@ pub struct VrState {
     frame_stream: Option<xr::FrameStream<xr::OpenGL>>,
     swapchains: Vec<xr::Swapchain<xr::OpenGL>>,
     swapchain_images: Vec<Vec<u32>>,
-    reference_space: Option<xr::Space>,
+    pub reference_space: Option<xr::Space>,
     view_config_views: Vec<xr::ViewConfigurationView>,
 
     // Recovery
@@ -383,13 +383,13 @@ impl VrState {
             self.hmd_info.recommended_height = view.recommended_image_rect_height;
         }
 
-        // Create OpenGL graphics binding
-        let session_create_info = xr::opengl::SessionCreateInfo::Xlib {
-            x_display: std::ptr::null_mut(),
-            visualid: 0,
-            glx_fb_config: std::ptr::null_mut(),
-            glx_drawable: 0,
-            glx_context: egl_context as _,
+        // Create OpenGL graphics binding via EGL (not Xlib/GLX).
+        // The compositor uses GBM + EGL for DRM rendering; the EGL display,
+        // config, and context are extracted from Smithay's EGL state.
+        let session_create_info = xr::opengl::SessionCreateInfo::Egl {
+            display: egl_display as _,
+            config: egl_config as _,
+            context: egl_context as _,
         };
 
         // Create session

@@ -26,13 +26,15 @@
 
 (defcustom ewwm-vr-gaze-source 'auto
   "Preferred gaze data source.
-`auto': prefer OpenXR, fall back to Pupil Labs, then simulated.
+`auto': prefer OpenXR, fall back to Bigeye, Pupil Labs, then simulated.
 `openxr': force OpenXR eye gaze extension.
+`bigeye': Bigscreen Bigeye IR cameras with local pupil detection.
 `pupil-labs': force Pupil Labs ZMQ client.
 `simulated': use simulated gaze for development.
 `none': disable eye tracking."
   :type '(choice (const auto)
                  (const openxr)
+                 (const bigeye)
                  (const pupil-labs)
                  (const simulated)
                  (const none))

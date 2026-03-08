@@ -726,6 +726,55 @@ pub fn run(socket_name: Option<String>, ipc_config: IpcConfig) -> anyhow::Result
         "DRM devices initialized"
     );
 
+    // ── 4a. Initialize VR (OpenXR) if available ──────────────────────
+    //
+    // Wire EGL context from the primary GPU to VrState::create_session()
+    // so OpenXR can share the GL context for swapchain rendering.
+    // Initialize VR (OpenXR) if available.
+    // Wire EGL context from the primary GPU to VrState::create_session()
+    // so OpenXR can share the GL context for swapchain rendering.
+    #[cfg(feature = "vr")]
+    {
+        match state.vr_state.initialize() {
+            Ok(true) => {
+                if let Some(primary) = backend_data.primary_node {
+                    if let Some(gpu) = backend_data.devices.get(&primary) {
+                        // Extract raw EGL pointers from Smithay's EGL context.
+                        // These are passed to OpenXR's EGL session binding so
+                        // the runtime can share the GL context for swapchains.
+                        //
+                        // Smithay 0.7 EGLContext API:
+                        //   display() -> &EGLDisplay
+                        //   EGLDisplay::get_display_handle() -> EGLDisplayHandle
+                        //   get_context_handle() -> raw EGL context ptr
+                        //   config_id() -> ffi::egl::types::EGLConfig
+                        let egl_ctx = gpu.renderer.egl_context();
+                        let raw_display = egl_ctx.display()
+                            .get_display_handle().as_ptr()
+                            as *mut std::ffi::c_void;
+                        let raw_config = egl_ctx.config_id()
+                            as *mut std::ffi::c_void;
+                        let raw_context = egl_ctx.get_context_handle()
+                            as *mut std::ffi::c_void;
+                        if let Err(e) = state.vr_state.create_session(
+                            raw_display as *mut std::ffi::c_void,
+                            raw_config,
+                            raw_context,
+                        ) {
+                            warn!("VR: failed to create OpenXR session: {}", e);
+                        }
+                    }
+                }
+            }
+            Ok(false) => {
+                info!("VR: not available, continuing in 2D mode");
+            }
+            Err(e) => {
+                warn!("VR: initialization failed: {}", e);
+            }
+        }
+    }
+
     // ── 5. Set up libinput for input events ───────────────────────────
 
     let mut libinput_context =
@@ -954,6 +1003,67 @@ pub fn run(socket_name: Option<String>, ipc_config: IpcConfig) -> anyhow::Result
 
         // Poll IPC clients.
         ipc::IpcServer::poll_clients(&mut state);
+
+        // ── VR frame submission ─────────────────────────────────────
+        // Poll OpenXR events, run the VR frame loop, and submit frames
+        // to the headset via Monado.
+        #[cfg(feature = "vr")]
+        if state.vr_state.enabled {
+            use openxrs as xr;
+
+            state.vr_state.poll_events();
+
+            if let Some(frame_data) = state.vr_state.tick_frame() {
+                if frame_data.should_render {
+                    let views = &frame_data.views;
+                    let view_configs = state.vr_state.view_config_views().to_vec();
+
+                    // Acquire and release each eye's swapchain image.
+                    // TODO: render actual scene content into swapchain images
+                    // via vr_renderer::render_frame_to_swapchains().
+                    for swapchain in state.vr_state.swapchains_mut().iter_mut() {
+                        if let Ok(_image_idx) = swapchain.acquire_image() {
+                            let _ = swapchain.wait_image(xr::Duration::INFINITE);
+                            swapchain.release_image().ok();
+                        }
+                    }
+
+                    // Build projection layers and submit frame.
+                    if let Some(space) = state.vr_state.reference_space.as_ref() {
+                        let swapchains = &state.vr_state.swapchains;
+                        if swapchains.len() >= 2 && views.len() >= 2 {
+                            let projection_views: Vec<xr::CompositionLayerProjectionView<xr::OpenGL>> =
+                                views.iter().zip(swapchains.iter()).zip(view_configs.iter())
+                                    .map(|((view, swapchain), config)| {
+                                        xr::CompositionLayerProjectionView::new()
+                                            .pose(view.pose)
+                                            .fov(view.fov)
+                                            .sub_image(xr::SwapchainSubImage::new()
+                                                .swapchain(swapchain)
+                                                .image_rect(xr::Rect2Di {
+                                                    offset: xr::Offset2Di { x: 0, y: 0 },
+                                                    extent: xr::Extent2Di {
+                                                        width: config.recommended_image_rect_width as i32,
+                                                        height: config.recommended_image_rect_height as i32,
+                                                    },
+                                                })
+                                            )
+                                    })
+                                    .collect();
+
+                            let projection_layer = xr::CompositionLayerProjection::new()
+                                .space(space)
+                                .views(&projection_views);
+
+                            state.vr_state.end_frame(
+                                frame_data.predicted_display_time,
+                                &[projection_layer],
+                            );
+                        }
+                    }
+                }
+            }
+        }
 
         // Dispatch calloop sources (DRM, libinput, session, udev, Wayland).
         event_loop.dispatch(Some(Duration::from_millis(1)), &mut state)?;

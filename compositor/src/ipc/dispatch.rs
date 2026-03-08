@@ -228,6 +228,9 @@ pub fn handle_message(state: &mut EwwmState, client_id: u64, raw: &str) -> Optio
         Some("beyond-set-brightness") => handle_beyond_set_brightness(state, msg_id, &value),
         Some("beyond-set-fan-speed") => handle_beyond_set_fan_speed(state, msg_id, &value),
         Some("beyond-set-led-color") => handle_beyond_set_led_color(state, msg_id, &value),
+        Some("beyond-firmware-version") => handle_beyond_firmware_version(state, msg_id),
+        // VR device listing
+        Some("vr-list-devices") => handle_vr_list_devices(state, msg_id),
         Some(other) => Some(error_response(
             msg_id,
             &format!("unknown message type: {other}"),
@@ -3117,6 +3120,52 @@ fn handle_beyond_set_led_color(
         Ok(()) => Some(ok_response(msg_id)),
         Err(e) => Some(error_response(msg_id, &e)),
     }
+}
+
+fn handle_beyond_firmware_version(
+    state: &mut EwwmState,
+    msg_id: i64,
+) -> Option<String> {
+    let version = state.vr_state.beyond_hid.firmware_version_str();
+    Some(format!(
+        "(:type :response :id {} :status :ok :firmware-version \"{}\")",
+        msg_id, version,
+    ))
+}
+
+// ── VR device listing ──────────────────────────────────────
+
+fn handle_vr_list_devices(state: &mut EwwmState, msg_id: i64) -> Option<String> {
+    let mut devices = Vec::new();
+
+    // HMD info from VR state
+    if state.vr_state.enabled {
+        let hmd = &state.vr_state.hmd_info;
+        devices.push(format!(
+            "(:type :hmd :name \"{}\" :vendor {} :tracking-orient {} :tracking-pos {} :resolution (:w {} :h {}))",
+            escape_string(&hmd.system_name),
+            hmd.vendor_id,
+            if hmd.orientation_tracking { "t" } else { "nil" },
+            if hmd.position_tracking { "t" } else { "nil" },
+            hmd.recommended_width,
+            hmd.recommended_height,
+        ));
+    }
+
+    // Beyond HID devices
+    let beyond = &state.vr_state.beyond_hid;
+    if beyond.is_detected() {
+        devices.push(format!(
+            "(:type :controller :name \"Bigscreen Beyond\" :subtype :hid :firmware \"{}\")",
+            escape_string(&beyond.firmware_version_str()),
+        ));
+    }
+
+    let device_list = devices.join(" ");
+    Some(format!(
+        "(:type :response :id {} :status :ok :devices ({}))",
+        msg_id, device_list,
+    ))
 }
 
 // ── Helpers ────────────────────────────────────────────────

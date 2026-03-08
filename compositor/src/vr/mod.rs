@@ -55,3 +55,4 @@ pub mod radial_menu;
 pub mod capture_visibility;
 pub mod beyond_hid;
 pub mod eye_capture;
+pub mod pupil_detect;

@@ -204,6 +204,39 @@ When called interactively, prompts for each channel."
                      (plist-get resp :reason))))
       (error (message "ewwm-vr-beyond: %s" (error-message-string err))))))
 
+(defun ewwm-vr-beyond-firmware-version ()
+  "Query and display the Beyond firmware version."
+  (interactive)
+  (if (not (fboundp 'ewwm-ipc-send-sync))
+      (message "ewwm-vr-beyond: IPC not available")
+    (condition-case err
+        (let ((resp (ewwm-ipc-send-sync
+                     '(:type :beyond-firmware-version))))
+          (if (eq (plist-get resp :status) :ok)
+              (message "ewwm-vr-beyond: firmware %s"
+                       (plist-get resp :firmware-version))
+            (message "ewwm-vr-beyond: %s"
+                     (plist-get resp :reason))))
+      (error (message "ewwm-vr-beyond: %s"
+                      (error-message-string err))))))
+
+(defun ewwm-vr-list-devices ()
+  "List all detected VR devices via IPC."
+  (interactive)
+  (if (not (fboundp 'ewwm-ipc-send-sync))
+      (message "ewwm-vr: IPC not available")
+    (condition-case err
+        (let ((resp (ewwm-ipc-send-sync
+                     '(:type :vr-list-devices))))
+          (if (eq (plist-get resp :status) :ok)
+              (let ((devices (plist-get resp :devices)))
+                (if devices
+                    (message "ewwm-vr devices: %s" devices)
+                  (message "ewwm-vr: no devices detected")))
+            (message "ewwm-vr: %s" (plist-get resp :reason))))
+      (error (message "ewwm-vr: %s"
+                      (error-message-string err))))))
+
 ;; ── Mode-line ────────────────────────────────────────────────
 
 (defun ewwm-vr-beyond-mode-line-string ()

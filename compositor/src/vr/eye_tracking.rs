@@ -20,6 +20,8 @@ pub enum GazeSource {
     OpenXR,
     /// Pupil Labs via ZMQ (external eye tracker).
     PupilLabs,
+    /// Bigscreen Bigeye IR cameras with local pupil detection.
+    Bigeye,
     /// Simulated gaze for development/testing.
     Simulated,
     /// No gaze source available.
@@ -31,6 +33,7 @@ impl GazeSource {
         match self {
             Self::OpenXR => "openxr",
             Self::PupilLabs => "pupil-labs",
+            Self::Bigeye => "bigeye",
             Self::Simulated => "simulated",
             Self::None => "none",
         }
@@ -40,10 +43,11 @@ impl GazeSource {
         match s {
             "openxr" => Some(Self::OpenXR),
             "pupil-labs" => Some(Self::PupilLabs),
+            "bigeye" => Some(Self::Bigeye),
             "simulated" => Some(Self::Simulated),
             "none" => Some(Self::None),
-            "auto" => None, // auto selection
-            _ => None,
+            "auto" => Option::None, // auto selection
+            _ => Option::None,
         }
     }
 }
@@ -676,13 +680,29 @@ impl EyeTracking {
     }
 
     /// Get the active gaze source (auto-selects if preference is None).
-    pub fn resolve_source(&self, openxr_available: bool, pupil_available: bool) -> GazeSource {
+    pub fn resolve_source(
+        &self,
+        openxr_available: bool,
+        pupil_available: bool,
+    ) -> GazeSource {
+        self.resolve_source_full(openxr_available, pupil_available, false)
+    }
+
+    /// Get the active gaze source with Bigeye availability.
+    pub fn resolve_source_full(
+        &self,
+        openxr_available: bool,
+        pupil_available: bool,
+        bigeye_available: bool,
+    ) -> GazeSource {
         if let Some(preferred) = self.preferred_source {
             return preferred;
         }
-        // Auto: prefer OpenXR (lower latency), fall back to Pupil, then simulated
+        // Auto: OpenXR > Bigeye > Pupil Labs > Simulated
         if openxr_available {
             GazeSource::OpenXR
+        } else if bigeye_available {
+            GazeSource::Bigeye
         } else if pupil_available {
             GazeSource::PupilLabs
         } else if self.simulated.mode.is_some() {

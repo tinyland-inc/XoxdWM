@@ -408,11 +408,8 @@ in {
         KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="35bd", ATTRS{idProduct}=="4004", MODE="0660", GROUP="video", TAG+="uaccess"
         # Bigscreen Beyond USB (all devices)
         SUBSYSTEM=="usb", ATTR{idVendor}=="35bd", MODE="0666"
-        # Bigscreen Beyond non-desktop flag (EDID quirk workaround)
-        # Note: "BIG" is the binary EDID manufacturer code (not strings-extractable).
-        # We match on the product name "Beyond" which is a plain ASCII string in EDID.
-        # Note: non_desktop sysfs attr only exists if kernel/driver supports it.
-        ACTION=="change", SUBSYSTEM=="drm", ENV{HOTPLUG}=="1", RUN+="/bin/sh -c 'for c in /sys/class/drm/card*-DP-*/; do if [ -f $$c/edid ] && ${pkgs.binutils-unwrapped}/bin/strings $$c/edid 2>/dev/null | grep -q Beyond; then [ -w $$c/non_desktop ] && echo 1 > $$c/non_desktop 2>/dev/null; fi; done'"
+        # Note: non_desktop is an immutable DRM property set by the kernel EDID
+        # quirk table (BIG/0x1234). Kernel 6.13+ handles this automatically.
         # Beyond auto power-on: trigger systemd service when HMD hidraw appears
         KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="35bd", ATTRS{idProduct}=="0101", ACTION=="add", TAG+="systemd", ENV{SYSTEMD_WANTS}="exwm-vr-beyond-power.service"
       '';

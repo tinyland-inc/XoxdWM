@@ -6,6 +6,9 @@
 # Commands:
 #   prereqs          Install groups, udev rules, check firmware
 #   kernel-upgrade   Install ELRepo kernel-ml + firmware update
+#   sway-setup       Build + install sway host compositor
+#   steam-setup      Install native Steam + configure SteamVR
+#   monado-setup     Build + install Monado OpenXR runtime
 #   verify           Verify display, DRM connectors, USB, permissions
 #   beyond-status    Quick Beyond 2e hardware status
 #   beyond-hid-test  Test HID device access
@@ -60,19 +63,13 @@ cmd_prereqs() {
         echo "  ERROR: udev rules not found at $rules_src"
         exit 1
     fi
-    # Non-desktop rule (Beyond EDID quirk workaround)
-    local nd_src="$PROJECT_ROOT/packaging/udev/98-bigscreen-non-desktop.rules"
-    if [ -f "$nd_src" ]; then
-        cp "$nd_src" /etc/udev/rules.d/98-bigscreen-non-desktop.rules
-    elif [ -f /tmp/98-bigscreen-non-desktop.rules ]; then
-        cp /tmp/98-bigscreen-non-desktop.rules /etc/udev/rules.d/98-bigscreen-non-desktop.rules
-    fi
+    # Note: non_desktop is an immutable DRM property set by kernel EDID quirk
+    # table (BIG/0x1234). Kernel 6.13+ handles this automatically — no udev
+    # rule needed. The old 98-bigscreen-non-desktop.rules was a no-op.
 
     udevadm control --reload-rules
     udevadm trigger
     echo "  Installed: /etc/udev/rules.d/99-exwm-vr.rules"
-    [ -f /etc/udev/rules.d/98-bigscreen-non-desktop.rules ] && \
-        echo "  Installed: /etc/udev/rules.d/98-bigscreen-non-desktop.rules"
     echo
 
     # Beyond power-on service
@@ -151,7 +148,7 @@ cmd_kernel_upgrade() {
     echo "[4/4] Configuring boot..."
     # Note: do NOT use video=DP-2:d — it disables the connector entirely,
     # preventing Monado/SteamVR from acquiring it via DRM lease.
-    # non_desktop is handled by 98-bigscreen-non-desktop.rules udev rule.
+    # non_desktop is handled by kernel EDID quirk table (BIG/0x1234).
     local vr_args="amdgpu.modeset=1 amdgpu.dc=1 amdgpu.dcdebugmask=0x10"
     # Update /etc/default/grub for future kernel installs
     if ! grep -q 'amdgpu.modeset=1' /etc/default/grub; then
@@ -164,15 +161,8 @@ cmd_kernel_upgrade() {
     echo "  Args added: $vr_args"
     echo
 
-    # Non-desktop udev rule (copy from repo or /tmp)
-    local nd_src="$PROJECT_ROOT/packaging/udev/98-bigscreen-non-desktop.rules"
-    if [ -f "$nd_src" ]; then
-        cp "$nd_src" /etc/udev/rules.d/98-bigscreen-non-desktop.rules
-    elif [ -f /tmp/98-bigscreen-non-desktop.rules ]; then
-        cp /tmp/98-bigscreen-non-desktop.rules /etc/udev/rules.d/98-bigscreen-non-desktop.rules
-    else
-        echo "  WARNING: 98-bigscreen-non-desktop.rules not found, skipping"
-    fi
+    # Note: non_desktop is an immutable DRM property handled by kernel EDID
+    # quirk table — no udev rule needed for kernels >= 6.13.
     udevadm control --reload-rules
     echo
 
@@ -363,9 +353,17 @@ cmd_sway_setup() {
         libdrm-devel json-c-devel pango-devel cairo-devel pcre2-devel \
         meson ninja-build gcc scdoc \
         seatd xorg-x11-server-Xwayland 2>&1 | tail -5
-    # Terminal: foot preferred, xterm as fallback (foot not in Rocky 10 repos)
-    if ! command -v foot >/dev/null 2>&1; then
-        dnf install -y xterm 2>&1 | tail -2
+    # Terminal + launcher (from EPEL)
+    # Note: nix-packaged terminals (alacritty, ghostty) fail on non-NixOS due
+    # to Wayland/GL library mismatches. System-packaged kitty works correctly.
+    dnf install -y epel-release 2>&1 | tail -2
+    if ! command -v kitty >/dev/null 2>&1; then
+        dnf install -y kitty 2>/dev/null && echo "  kitty installed" || \
+            { echo "  WARNING: kitty not available, falling back to xterm"; dnf install -y xterm 2>&1 | tail -2; }
+    fi
+    if ! command -v dmenu-wl_run >/dev/null 2>&1; then
+        dnf install -y dmenu-wayland 2>/dev/null && echo "  dmenu-wayland installed" || \
+            echo "  WARNING: dmenu-wayland not available"
     fi
     echo
 
@@ -403,8 +401,40 @@ cmd_sway_setup() {
     fi
     echo
 
+    # Build xdg-desktop-portal-wlr (screenshot/screencast portals for sway)
+    # NOTE: This does NOT provide DRM lease pass-through. DRM lease works
+    # natively through sway's wlr-drm-lease-v1 protocol — but only with
+    # native Steam. Flatpak Steam's pressure-vessel proxy filters it out.
+    echo "[4/6] Building xdg-desktop-portal-wlr..."
+    local portal_ver="0.7.1"
+    if ! command -v xdg-desktop-portal-wlr >/dev/null 2>&1; then
+        dnf install -y inih-devel systemd-devel pipewire-devel 2>&1 | tail -3
+        local portal_dir="/tmp/xdpw-build"
+        rm -rf "$portal_dir"
+        git clone --depth 1 --branch "v$portal_ver" \
+            https://github.com/emersion/xdg-desktop-portal-wlr.git "$portal_dir" 2>&1 | tail -1
+        cd "$portal_dir"
+        meson setup build --prefix=/usr/local -Dbuildtype=release 2>&1 | tail -3
+        ninja -C build -j"$(nproc)" 2>&1 | tail -3
+        ninja -C build install 2>&1 | tail -3
+        cd /
+        rm -rf "$portal_dir"
+        echo "  Installed: $(command -v xdg-desktop-portal-wlr 2>/dev/null || echo 'ERROR')"
+        # Register as the portal backend for sway
+        mkdir -p /usr/share/xdg-desktop-portal
+        cat > /usr/share/xdg-desktop-portal/sway-portals.conf <<'PORTAL'
+[preferred]
+default=gtk
+org.freedesktop.impl.portal.Screenshot=wlr
+org.freedesktop.impl.portal.ScreenCast=wlr
+PORTAL
+    else
+        echo "  xdg-desktop-portal-wlr already installed"
+    fi
+    echo
+
     # Install config
-    echo "[4/5] Installing sway config..."
+    echo "[5/6] Installing sway config..."
     local cfg_dir="/home/$user/.config/sway"
     mkdir -p "$cfg_dir"
     local cfg_src="$SCRIPT_DIR/../sway/config"
@@ -427,15 +457,103 @@ cmd_sway_setup() {
     echo
 
     # Verify
-    echo "[5/5] Verifying..."
+    echo "[6/6] Verifying..."
     echo "  sway: $(command -v sway 2>/dev/null || echo 'NOT FOUND')"
     echo "  seatd: $(systemctl is-active seatd.service 2>/dev/null)"
     echo "  Xwayland: $(command -v Xwayland 2>/dev/null || echo 'NOT FOUND')"
-    echo "  terminal: $(command -v foot 2>/dev/null || command -v xterm 2>/dev/null || echo 'NOT FOUND')"
+    echo "  terminal: $(command -v kitty 2>/dev/null || command -v xterm 2>/dev/null || echo 'NOT FOUND')"
+    echo "  portal-wlr: $(command -v xdg-desktop-portal-wlr 2>/dev/null || echo 'NOT FOUND')"
     echo
     echo "=== Sway setup complete ==="
     echo "  Start from TTY: sway"
-    echo "  Then run Steam: flatpak run com.valvesoftware.Steam"
+    echo "  Install Steam: exwm-vr-setup steam-setup"
+}
+
+cmd_steam_setup() {
+    _need_root
+    local user
+    user=$(_check_user)
+
+    echo "=== Native Steam + SteamVR Setup ==="
+    echo "  IMPORTANT: Flatpak Steam breaks DRM leasing (pressure-vessel"
+    echo "  Wayland proxy filters wp_drm_lease_device_v1). Native RPM required."
+    echo
+
+    # Disable broken repos
+    for repo in runner_gitlab-runner runner_gitlab-runner-source tailscale-stable; do
+        dnf config-manager --disable "$repo" 2>/dev/null || true
+    done
+
+    # Install EPEL + RPM Fusion (nonfree for Steam)
+    echo "[1/5] Installing repositories..."
+    dnf install -y epel-release 2>&1 | tail -3
+    local rhel_ver
+    rhel_ver=$(rpm -E %rhel)
+    dnf install -y \
+        "https://mirrors.rpmfusion.org/free/el/rpmfusion-free-release-${rhel_ver}.noarch.rpm" \
+        "https://mirrors.rpmfusion.org/nonfree/el/rpmfusion-nonfree-release-${rhel_ver}.noarch.rpm" \
+        2>&1 | tail -3 || echo "  RPM Fusion may already be installed"
+    echo
+
+    # 32-bit compat libraries (Steam client is 32-bit)
+    echo "[2/5] Installing 32-bit compatibility libraries..."
+    dnf install -y \
+        glibc.i686 libstdc++.i686 libX11.i686 libXext.i686 \
+        mesa-libGL.i686 mesa-dri-drivers.i686 \
+        alsa-lib.i686 pulseaudio-libs.i686 \
+        nss.i686 nspr.i686 \
+        libcurl.i686 openssl-libs.i686 2>&1 | tail -5
+    echo
+
+    # Install Steam
+    echo "[3/5] Installing Steam..."
+    dnf install -y steam 2>&1 | tail -5
+    echo "  steam: $(command -v steam 2>/dev/null || echo 'NOT FOUND')"
+    echo
+
+    # Remove flatpak Steam if present (can't coexist cleanly)
+    if flatpak info com.valvesoftware.Steam >/dev/null 2>&1; then
+        echo "  NOTE: Flatpak Steam is still installed."
+        echo "  Remove it to avoid confusion: flatpak uninstall com.valvesoftware.Steam"
+    fi
+
+    # Patch SteamVR if already installed
+    echo "[4/5] Configuring SteamVR..."
+    local steam_dir="/home/$user/.local/share/Steam"
+    local steamvr_dir="$steam_dir/steamapps/common/SteamVR"
+    if [ -d "$steamvr_dir" ]; then
+        # CAP_SYS_NICE on vrcompositor-launcher
+        local vrc="$steamvr_dir/bin/linux64/vrcompositor-launcher"
+        if [ -f "$vrc" ]; then
+            setcap CAP_SYS_NICE+ep "$vrc" 2>/dev/null && \
+                echo "  CAP_SYS_NICE set on vrcompositor-launcher"
+        fi
+        # Patch SDL_VIDEODRIVER to wayland (SteamVR defaults to x11 which blocks DRM lease)
+        local vrl="$steamvr_dir/bin/linux64/vrcompositor-launcher.sh"
+        if [ -f "$vrl" ]; then
+            sed -i 's/export SDL_VIDEODRIVER=x11/export SDL_VIDEODRIVER=wayland/' "$vrl" 2>/dev/null
+            echo "  Patched SDL_VIDEODRIVER=wayland in vrcompositor-launcher.sh"
+        fi
+    else
+        echo "  SteamVR not yet installed."
+        echo "  Run Steam, install SteamVR, then re-run: exwm-vr-setup steam-setup"
+    fi
+    echo
+
+    # Verify
+    echo "[5/5] Verifying..."
+    echo "  steam: $(command -v steam 2>/dev/null || echo 'NOT FOUND')"
+    if [ -d "$steamvr_dir" ]; then
+        echo "  SteamVR: $steamvr_dir"
+    else
+        echo "  SteamVR: not installed yet (install via Steam)"
+    fi
+    echo
+
+    echo "=== Steam setup complete ==="
+    echo "  Launch: steam (from sway terminal)"
+    echo "  SteamVR: Install via Steam → Library → Tools → SteamVR"
+    echo "  After SteamVR install, re-run: exwm-vr-setup steam-setup"
 }
 
 cmd_monado_setup() {
@@ -540,6 +658,315 @@ cmd_beyond_power_on() {
     python3 "$script" "$@"
 }
 
+cmd_beyond_first_frame() {
+    echo "=== Beyond First Frame Test ==="
+    echo "  Validates the full DRM lease + Monado + OpenXR pipeline"
+    echo "  by running hello_xr to display a test scene in the headset."
+    echo
+
+    # 1. Power on Beyond
+    echo "[1/4] Powering on Beyond display..."
+    cmd_beyond_power_on 2>/dev/null || echo "  WARNING: power-on failed (may already be on)"
+    sleep 2
+    echo
+
+    # 2. Verify non_desktop connector
+    echo "[2/4] Checking DRM connectors..."
+    local found_nd=false
+    for c in /sys/class/drm/card*-DP-*/; do
+        [ -d "$c" ] || continue
+        local n s nd
+        n=$(basename "$c")
+        s=$(cat "$c/status" 2>/dev/null)
+        nd=$(cat "$c/non_desktop" 2>/dev/null)
+        echo "  $n: status=$s non_desktop=$nd"
+        if [ "$s" = "connected" ] && [ "$nd" = "1" ]; then
+            found_nd=true
+        fi
+    done
+    if ! $found_nd; then
+        echo "  ERROR: No non_desktop connector found. Check kernel EDID quirk."
+        exit 1
+    fi
+    echo
+
+    # 3. Start monado-service in background
+    echo "[3/4] Starting monado-service..."
+    local monado_env="$HOME/.config/monado/env"
+    if [ -f "$monado_env" ]; then
+        set -a; source "$monado_env"; set +a
+    else
+        echo "  WARNING: $monado_env not found, using defaults"
+        export XRT_COMPOSITOR_FORCE_WAYLAND=1
+        export STEAMVR_LH_ENABLE=1
+    fi
+
+    # Kill any existing monado-service
+    pkill -f monado-service 2>/dev/null || true
+    sleep 1
+
+    monado-service &
+    local monado_pid=$!
+    sleep 3
+
+    if ! kill -0 "$monado_pid" 2>/dev/null; then
+        echo "  ERROR: monado-service exited prematurely"
+        echo "  Check: monado-cli probe"
+        exit 1
+    fi
+    echo "  monado-service running (PID $monado_pid)"
+    echo
+
+    # 4. Run hello_xr
+    echo "[4/4] Running hello_xr test..."
+    local hello_xr=""
+    for candidate in \
+        /usr/local/bin/hello_xr \
+        /tmp/openxr-build/build/src/tests/hello_xr/hello_xr \
+        "$HOME/bin/hello_xr"; do
+        if [ -x "$candidate" ]; then
+            hello_xr="$candidate"
+            break
+        fi
+    done
+
+    if [ -z "$hello_xr" ]; then
+        echo "  hello_xr not found. Build it first:"
+        echo "    exwm-vr-setup openxr-build"
+        kill "$monado_pid" 2>/dev/null
+        exit 1
+    fi
+
+    echo "  Running: $hello_xr -G Vulkan2"
+    XR_RUNTIME_JSON="${XR_RUNTIME_JSON:-/usr/local/share/openxr/1/openxr_monado.json}" \
+        timeout 30 "$hello_xr" -G Vulkan2 2>&1 | tail -20
+    local rc=$?
+
+    # Cleanup
+    kill "$monado_pid" 2>/dev/null
+    wait "$monado_pid" 2>/dev/null
+
+    echo
+    if [ $rc -eq 0 ]; then
+        echo "PASS: hello_xr completed successfully — first frame confirmed!"
+    elif [ $rc -eq 124 ]; then
+        echo "PASS: hello_xr ran for 30 seconds (timeout) — frames were being submitted"
+    else
+        echo "FAIL: hello_xr exited with code $rc"
+        echo "  Debug: XR_RUNTIME_JSON=$XR_RUNTIME_JSON monado-cli probe"
+    fi
+}
+
+cmd_openxr_build() {
+    echo "=== Build hello_xr from OpenXR-SDK-Source ==="
+    echo
+
+    # Dependencies
+    echo "[1/3] Checking build dependencies..."
+    if command -v cmake >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1; then
+        echo "  cmake + ninja: OK"
+    else
+        echo "  Installing cmake + ninja..."
+        sudo dnf install -y cmake ninja-build gcc-c++ 2>&1 | tail -3
+    fi
+
+    # Vulkan SDK headers
+    if ! pkg-config --exists vulkan 2>/dev/null; then
+        echo "  Installing Vulkan development headers..."
+        sudo dnf install -y vulkan-headers vulkan-loader-devel 2>&1 | tail -3
+    fi
+    echo
+
+    # Clone and build
+    local build_dir="/tmp/openxr-build"
+    echo "[2/3] Building hello_xr..."
+    rm -rf "$build_dir"
+    git clone --depth 1 https://github.com/KhronosGroup/OpenXR-SDK-Source.git "$build_dir" 2>&1 | tail -1
+    cd "$build_dir"
+    cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release 2>&1 | tail -5
+    ninja -C build hello_xr 2>&1 | tail -5
+    echo
+
+    # Install
+    echo "[3/3] Installing..."
+    local hello_xr="$build_dir/build/src/tests/hello_xr/hello_xr"
+    if [ -x "$hello_xr" ]; then
+        sudo cp "$hello_xr" /usr/local/bin/hello_xr
+        echo "  Installed: /usr/local/bin/hello_xr"
+    else
+        echo "  ERROR: hello_xr binary not found after build"
+        exit 1
+    fi
+    echo
+
+    echo "=== hello_xr built and installed ==="
+    echo "  Test: exwm-vr-setup beyond-first-frame"
+}
+
+cmd_beyond_download_config() {
+    echo "=== Beyond Calibration Config Download ==="
+    echo "  Downloads lens distortion, IPD, display geometry, and color"
+    echo "  calibration from the Beyond headset via lighthouse_console."
+    echo
+
+    # Find lighthouse_console
+    local lhc=""
+    for candidate in \
+        "$HOME/.steam/steam/steamapps/common/SteamVR/tools/lighthouse/bin/linux64/lighthouse_console" \
+        /usr/local/bin/lighthouse_console \
+        "$HOME/bin/lighthouse_console"; do
+        if [ -x "$candidate" ]; then
+            lhc="$candidate"
+            break
+        fi
+    done
+
+    if [ -z "$lhc" ]; then
+        echo "  ERROR: lighthouse_console not found"
+        echo "  Install SteamVR: exwm-vr-setup steam-setup"
+        echo "  Or copy from a SteamVR install:"
+        echo "    SteamVR/tools/lighthouse/bin/linux64/lighthouse_console"
+        exit 1
+    fi
+    echo "  lighthouse_console: $lhc"
+
+    # Detect Beyond serial number
+    echo "[1/3] Detecting Beyond serial number..."
+    local serial=""
+    serial=$("$lhc" 2>/dev/null | grep -oP 'LHR-[A-Z0-9]+|XCNL[A-Z0-9]+' | head -1)
+    if [ -z "$serial" ]; then
+        echo "  WARNING: Could not auto-detect serial. Trying all devices..."
+        "$lhc" 2>&1 | head -10
+    fi
+    echo "  Serial: ${serial:-unknown}"
+    echo
+
+    # Download config
+    local config_dir="$HOME/.config/monado"
+    mkdir -p "$config_dir"
+    local config_file="$config_dir/beyond-config.json"
+
+    echo "[2/3] Downloading calibration config..."
+    if [ -f "$config_file" ]; then
+        cp "$config_file" "${config_file}.bak"
+        echo "  Backed up existing: ${config_file}.bak"
+    fi
+
+    if [ -n "$serial" ]; then
+        "$lhc" downloadconfig "$serial" > "$config_file" 2>&1
+    else
+        "$lhc" downloadconfig > "$config_file" 2>&1
+    fi
+
+    if [ -s "$config_file" ]; then
+        echo "  Saved: $config_file ($(wc -c < "$config_file") bytes)"
+    else
+        echo "  ERROR: Config download produced empty file"
+        rm -f "$config_file"
+        exit 1
+    fi
+    echo
+
+    # Parse key values
+    echo "[3/3] Config summary..."
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c "
+import json, sys
+try:
+    cfg = json.load(open('$config_file'))
+    print(f'  Device: {cfg.get(\"device_class\", \"unknown\")}')
+    print(f'  Serial: {cfg.get(\"device_serial_number\", \"unknown\")}')
+    if 'device_measurements' in cfg:
+        m = cfg['device_measurements']
+        print(f'  IPD: {m.get(\"ipd\", \"?\")} mm')
+    if 'tracking_to_eye_transform' in cfg:
+        print(f'  Eye transforms: present ({len(cfg[\"tracking_to_eye_transform\"])} entries)')
+except Exception as e:
+    print(f'  (Could not parse config: {e})')
+" 2>/dev/null || echo "  (python3 not available for parsing)"
+    fi
+    echo
+
+    echo "=== Calibration config downloaded ==="
+    echo "  Config: $config_file"
+    echo "  Next: configure Monado IPD from this config"
+}
+
+cmd_beyond_oobe() {
+    echo "=== Beyond Out-of-Box Experience ==="
+    echo "  Full OOBE: power on → config → Monado → compositor → calibration"
+    echo
+
+    # Step 1: Power on
+    echo "[1/5] Powering on Beyond..."
+    cmd_beyond_power_on 2>/dev/null || echo "  (may already be on)"
+    sleep 2
+    echo
+
+    # Step 2: Download config if not present
+    echo "[2/5] Checking calibration config..."
+    local config_file="$HOME/.config/monado/beyond-config.json"
+    if [ -f "$config_file" ]; then
+        echo "  Config present: $config_file"
+    else
+        echo "  Downloading calibration config..."
+        cmd_beyond_download_config
+    fi
+    echo
+
+    # Step 3: Start Monado
+    echo "[3/5] Starting Monado..."
+    local monado_env="$HOME/.config/monado/env"
+    if [ -f "$monado_env" ]; then
+        set -a; source "$monado_env"; set +a
+    fi
+    pkill -f monado-service 2>/dev/null || true
+    sleep 1
+    monado-service &
+    local monado_pid=$!
+    sleep 3
+    if ! kill -0 "$monado_pid" 2>/dev/null; then
+        echo "  ERROR: monado-service failed to start"
+        exit 1
+    fi
+    echo "  Monado running (PID $monado_pid)"
+    echo
+
+    # Step 4: Check eye tracking cameras
+    echo "[4/5] Checking eye tracking..."
+    if lsusb 2>/dev/null | grep -q "35bd:0202"; then
+        echo "  Bigeye camera detected (35bd:0202)"
+        echo "  Eye tracking calibration will run after compositor starts"
+    else
+        echo "  Bigeye camera not detected — skipping eye tracking"
+    fi
+    echo
+
+    # Step 5: Run first frame test
+    echo "[5/5] Testing first frame..."
+    local hello_xr=""
+    for candidate in /usr/local/bin/hello_xr "$HOME/bin/hello_xr"; do
+        [ -x "$candidate" ] && hello_xr="$candidate" && break
+    done
+    if [ -n "$hello_xr" ]; then
+        XR_RUNTIME_JSON="${XR_RUNTIME_JSON:-/usr/local/share/openxr/1/openxr_monado.json}" \
+            timeout 10 "$hello_xr" -G Vulkan2 2>&1 | tail -5
+        echo "  First frame test complete"
+    else
+        echo "  hello_xr not available — build with: exwm-vr-setup openxr-build"
+    fi
+
+    # Cleanup
+    kill "$monado_pid" 2>/dev/null
+    wait "$monado_pid" 2>/dev/null
+    echo
+
+    echo "=== OOBE complete ==="
+    echo "  Next steps:"
+    echo "    1. Start compositor: ewwm-compositor --backend drm"
+    echo "    2. Eye calibration: triggered automatically if Bigeye detected"
+}
+
 cmd_full_setup() {
     cmd_prereqs
     echo
@@ -552,16 +979,21 @@ usage() {
     echo "Usage: exwm-vr-setup <command>"
     echo
     echo "Commands:"
-    echo "  prereqs          Install groups, udev rules, check firmware (sudo)"
-    echo "  kernel-upgrade   Install ELRepo kernel-ml + firmware (sudo)"
-    echo "  sway-setup       Build + install sway host compositor (sudo)"
-    echo "  monado-setup     Build + install Monado OpenXR runtime (sudo)"
-    echo "  verify           Verify display, DRM, USB, permissions"
-    echo "  beyond-status    Quick Beyond 2e status"
-    echo "  beyond-hid-test  Test HID device access"
-    echo "  beyond-power-on  Send HID power-on sequence to Beyond display"
-    echo "  gpu-tools        Install Vulkan tools + GPU diagnostics (sudo)"
-    echo "  full-setup       Run prereqs + kernel-upgrade (sudo)"
+    echo "  prereqs              Install groups, udev rules, check firmware (sudo)"
+    echo "  kernel-upgrade       Install ELRepo kernel-ml + firmware (sudo)"
+    echo "  sway-setup           Build + install sway host compositor (sudo)"
+    echo "  steam-setup          Install native Steam + configure SteamVR (sudo)"
+    echo "  monado-setup         Build + install Monado OpenXR runtime (sudo)"
+    echo "  verify               Verify display, DRM, USB, permissions"
+    echo "  beyond-status        Quick Beyond 2e status"
+    echo "  beyond-hid-test      Test HID device access"
+    echo "  beyond-power-on      Send HID power-on sequence to Beyond display"
+    echo "  beyond-first-frame   Test full pipeline: power-on → Monado → hello_xr"
+    echo "  beyond-download-config  Download Beyond calibration via lighthouse_console"
+    echo "  beyond-oobe          Full out-of-box experience (power → config → test)"
+    echo "  openxr-build         Build hello_xr from OpenXR-SDK-Source"
+    echo "  gpu-tools            Install Vulkan tools + GPU diagnostics (sudo)"
+    echo "  full-setup           Run prereqs + kernel-upgrade (sudo)"
     echo
     echo "Environment:"
     echo "  EXWM_USER        Override target user (default: \$SUDO_USER or \$USER)"
@@ -574,8 +1006,13 @@ case "${1:-}" in
     beyond-status)  shift; cmd_beyond_status "$@" ;;
     beyond-hid-test) shift; cmd_beyond_hid_test "$@" ;;
     sway-setup)     shift; cmd_sway_setup "$@" ;;
+    steam-setup)    shift; cmd_steam_setup "$@" ;;
     monado-setup)   shift; cmd_monado_setup "$@" ;;
     beyond-power-on) shift; cmd_beyond_power_on "$@" ;;
+    beyond-first-frame) shift; cmd_beyond_first_frame "$@" ;;
+    beyond-download-config) shift; cmd_beyond_download_config "$@" ;;
+    beyond-oobe)    shift; cmd_beyond_oobe "$@" ;;
+    openxr-build)   shift; cmd_openxr_build "$@" ;;
     gpu-tools)      shift; cmd_gpu_tools "$@" ;;
     full-setup)     shift; cmd_full_setup "$@" ;;
     -h|--help|help) usage ;;

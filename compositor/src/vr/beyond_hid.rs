@@ -699,6 +699,20 @@ impl BeyondHidManager {
     pub fn status_sexp(&self) -> String {
         self.status().to_sexp()
     }
+
+    /// Whether the Beyond headset is currently detected/connected.
+    pub fn is_detected(&self) -> bool {
+        self.state.connected
+    }
+
+    /// Return firmware version as a display string.
+    pub fn firmware_version_str(&self) -> String {
+        self.state
+            .serial
+            .as_deref()
+            .unwrap_or("unknown")
+            .to_string()
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────
