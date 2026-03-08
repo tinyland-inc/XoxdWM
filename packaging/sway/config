@@ -114,7 +114,7 @@ font pango:monospace 10
 
 bar {
     position top
-    status_command while echo "$(date +'%Y-%m-%d %H:%M') | $(cat /sys/class/drm/card0-DP-2/status 2>/dev/null || echo 'no-hmd')"; do sleep 5; done
+    status_command ~/.config/sway/status.sh
     colors {
         statusline #ffffff
         background #323232
@@ -127,6 +127,9 @@ bar {
 xwayland enable
 
 # ── Environment ───────────────────────────────────────────
+
+# D-Bus session bus (needed for flatpak/portal when sway is launched from TTY)
+exec_always export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
 
 # Monado / OpenXR
 exec_always export XRT_COMPOSITOR_FORCE_WAYLAND=1

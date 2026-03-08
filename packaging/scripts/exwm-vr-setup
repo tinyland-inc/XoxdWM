@@ -412,6 +412,13 @@ cmd_sway_setup() {
     [ ! -f "$cfg_src" ] && cfg_src="/tmp/exwm-sway-config"
     if [ -f "$cfg_src" ]; then
         cp "$cfg_src" "$cfg_dir/config"
+        # Status bar script
+        local status_src="${cfg_src%config}status.sh"
+        [ ! -f "$status_src" ] && status_src="/tmp/exwm-sway-status.sh"
+        if [ -f "$status_src" ]; then
+            cp "$status_src" "$cfg_dir/status.sh"
+            chmod +x "$cfg_dir/status.sh"
+        fi
         chown -R "$user:$user" "$cfg_dir"
         echo "  Installed: $cfg_dir/config"
     else
