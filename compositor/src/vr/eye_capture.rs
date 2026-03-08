@@ -230,7 +230,7 @@ mod linux_uvc {
     #[allow(non_camel_case_types, dead_code)]
     enum UvcFrameFormat {
         UVC_FRAME_FORMAT_UNKNOWN = 0,
-        UVC_FRAME_FORMAT_ANY = 0,
+        // UVC_FRAME_FORMAT_ANY is an alias for UNKNOWN (both 0 in C header)
         UVC_FRAME_FORMAT_UNCOMPRESSED = 1,
         UVC_FRAME_FORMAT_COMPRESSED = 2,
         UVC_FRAME_FORMAT_YUYV = 3,
