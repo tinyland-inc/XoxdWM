@@ -749,8 +749,10 @@ pub fn run(socket_name: Option<String>, ipc_config: IpcConfig) -> anyhow::Result
                         //   get_context_handle() → ffi::egl::types::EGLContext (*const c_void)
                         let egl_ctx = gpu.renderer.egl_context();
                         let display_handle = egl_ctx.display().get_display_handle();
-                        let raw_display = *display_handle
-                            as *mut std::ffi::c_void;
+                        // EGLDisplayHandle derefs to &ffi::egl::types::EGLDisplay
+                        // which is &*const c_void. Deref twice to get the raw ptr.
+                        let raw_display: *mut std::ffi::c_void =
+                            **display_handle as *mut std::ffi::c_void;
                         let raw_config = egl_ctx.config_id()
                             as *mut std::ffi::c_void;
                         let raw_context = egl_ctx.get_context_handle()

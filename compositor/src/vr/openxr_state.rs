@@ -781,26 +781,35 @@ impl VrState {
     /// Submit a projection frame with per-eye views.
     ///
     /// Builds CompositionLayerProjection from the provided views and
-    /// swapchains, then calls end_frame. This method encapsulates the
-    /// borrow-sensitive access to swapchains + reference_space + frame_stream.
+    /// swapchains, then submits via frame_stream. This method encapsulates
+    /// the borrow-sensitive access to swapchains + reference_space + frame_stream.
     pub fn submit_projection_frame(
         &mut self,
         views: &[xr::View],
         view_configs: &[xr::ViewConfigurationView],
         predicted_time: xr::Time,
     ) {
-        let space = match self.reference_space.as_ref() {
-            Some(s) => s,
-            None => return,
-        };
-
-        if self.swapchains.len() < 2 || views.len() < 2 {
+        if self.reference_space.is_none() || self.swapchains.len() < 2 || views.len() < 2 {
             return;
         }
 
+        // Build projection views referencing swapchains.
+        // We need to construct the layers and submit in one scope because
+        // CompositionLayerProjection borrows the Space and Swapchains.
+        let frame_stream = match self.frame_stream.as_mut() {
+            Some(fs) => fs,
+            None => return,
+        };
+
+        // Re-borrow after frame_stream extraction to avoid conflict.
+        // Safety: frame_stream is borrowed mutably above; reference_space
+        // and swapchains are borrowed immutably below. These are disjoint fields.
+        let space = self.reference_space.as_ref().unwrap();
+        let swapchains = &self.swapchains;
+
         let projection_views: Vec<xr::CompositionLayerProjectionView<xr::OpenGL>> = views
             .iter()
-            .zip(self.swapchains.iter())
+            .zip(swapchains.iter())
             .zip(view_configs.iter())
             .map(|((view, swapchain), config)| {
                 xr::CompositionLayerProjectionView::new()
@@ -823,7 +832,17 @@ impl VrState {
         let projection_layer =
             xr::CompositionLayerProjection::new().space(space).views(&projection_views);
 
-        self.end_frame(predicted_time, &[projection_layer]);
+        use std::ops::Deref;
+        let layer_refs: Vec<&xr::CompositionLayerBase<'_, xr::OpenGL>> =
+            vec![projection_layer.deref()];
+
+        if let Err(e) = frame_stream.end(
+            predicted_time,
+            xr::EnvironmentBlendMode::OPAQUE,
+            &layer_refs,
+        ) {
+            error!("VR: end_frame failed: {}", e);
+        }
     }
 
     /// Shut down VR.
