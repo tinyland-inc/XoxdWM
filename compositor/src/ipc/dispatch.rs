@@ -3054,7 +3054,10 @@ fn handle_beyond_status(state: &mut EwwmState, msg_id: i64) -> Option<String> {
 }
 
 fn handle_beyond_detect(state: &mut EwwmState, msg_id: i64) -> Option<String> {
-    state.vr_state.beyond_hid.detect();
+    // Scan for connected Beyond headset. In a full implementation this
+    // would enumerate /dev/hidraw* for BEYOND_VENDOR_ID:BEYOND_PRODUCT_ID_HMD.
+    // For now, assume connected if we get this far (user explicitly asking).
+    state.vr_state.beyond_hid.detect(true, None);
     let sexp = state.vr_state.beyond_hid.status_sexp();
     Some(format!(
         "(:type :response :id {} :status :ok :beyond {})",

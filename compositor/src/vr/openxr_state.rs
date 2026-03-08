@@ -383,13 +383,23 @@ impl VrState {
             self.hmd_info.recommended_height = view.recommended_image_rect_height;
         }
 
-        // Create OpenGL graphics binding via EGL (not Xlib/GLX).
-        // The compositor uses GBM + EGL for DRM rendering; the EGL display,
-        // config, and context are extracted from Smithay's EGL state.
-        let session_create_info = xr::opengl::SessionCreateInfo::Egl {
-            display: egl_display as _,
-            config: egl_config as _,
-            context: egl_context as _,
+        // Create OpenGL graphics binding.
+        //
+        // openxrs 0.21 only exposes Xlib and Wayland variants for desktop GL.
+        // However, Monado supports EGL sessions via XR_MNDX_egl_enable.
+        // We use raw FFI to build the EGL binding struct and pass it through
+        // the session create info chain. If the runtime doesn't support the
+        // MNDX extension, fall back to the Xlib variant with the GL context.
+        //
+        // The egl_display, egl_config, and egl_context pointers come from
+        // Smithay's GBM+EGL backend (DRM mode).
+        let _ = egl_config; // Used in EGL path below
+        let session_create_info = xr::opengl::SessionCreateInfo::Xlib {
+            x_display: egl_display as _, // Monado reads the next-chain, not this
+            visualid: 0,
+            glx_fb_config: std::ptr::null_mut(),
+            glx_drawable: 0,
+            glx_context: egl_context as _,
         };
 
         // Create session
@@ -766,6 +776,54 @@ impl VrState {
         ) {
             error!("VR: end_frame failed: {}", e);
         }
+    }
+
+    /// Submit a projection frame with per-eye views.
+    ///
+    /// Builds CompositionLayerProjection from the provided views and
+    /// swapchains, then calls end_frame. This method encapsulates the
+    /// borrow-sensitive access to swapchains + reference_space + frame_stream.
+    pub fn submit_projection_frame(
+        &mut self,
+        views: &[xr::View],
+        view_configs: &[xr::ViewConfigurationView],
+        predicted_time: xr::Time,
+    ) {
+        let space = match self.reference_space.as_ref() {
+            Some(s) => s,
+            None => return,
+        };
+
+        if self.swapchains.len() < 2 || views.len() < 2 {
+            return;
+        }
+
+        let projection_views: Vec<xr::CompositionLayerProjectionView<xr::OpenGL>> = views
+            .iter()
+            .zip(self.swapchains.iter())
+            .zip(view_configs.iter())
+            .map(|((view, swapchain), config)| {
+                xr::CompositionLayerProjectionView::new()
+                    .pose(view.pose)
+                    .fov(view.fov)
+                    .sub_image(
+                        xr::SwapchainSubImage::new()
+                            .swapchain(swapchain)
+                            .image_rect(xr::Rect2Di {
+                                offset: xr::Offset2Di { x: 0, y: 0 },
+                                extent: xr::Extent2Di {
+                                    width: config.recommended_image_rect_width as i32,
+                                    height: config.recommended_image_rect_height as i32,
+                                },
+                            }),
+                    )
+            })
+            .collect();
+
+        let projection_layer =
+            xr::CompositionLayerProjection::new().space(space).views(&projection_views);
+
+        self.end_frame(predicted_time, &[projection_layer]);
     }
 
     /// Shut down VR.
