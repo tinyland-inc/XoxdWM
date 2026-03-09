@@ -21,6 +21,7 @@ pub const BEYOND_PRODUCT_ID_AUDIO: u16 = 0x0105;
 pub const BEYOND_PRODUCT_ID_DFU: u16 = 0x4004;
 
 /// HID command bytes (byte[1] of 65-byte feature reports).
+const CMD_POWER_ON: u8 = 0x22; // SetWorkState
 const CMD_LED_COLOR: u8 = 0x4C; // 'L'
 const CMD_FAN_SPEED: u8 = 0x46; // 'F'
 const CMD_BRIGHTNESS: u8 = 0x49; // 'I'
@@ -69,54 +70,35 @@ pub fn build_feature_report(cmd: u8, data: &[u8]) -> [u8; REPORT_SIZE] {
     report
 }
 
-/// Build the 5-packet display power-on sequence.
+/// Build the 5-packet display power-on sequence (SetWorkState command).
 ///
-/// Verified on hardware (honey, 2026-03-04).  The Beyond HID descriptor
-/// has no explicit report IDs — all reports use implicit ID 0x00.
-///
+/// Uses `build_feature_report(CMD_POWER_ON, &[phase])` for correct byte layout:
 /// ```text
-/// [0x00, 0x00, 0x22, 0x00, 0x00, ...zeros]  (x3, phase 0)
-/// [0x00, 0x00, 0x22, 0x01, 0x00, ...zeros]  (x1, phase 1)
-/// [0x00, 0x00, 0x22, 0x02, 0x00, ...zeros]  (x1, phase 2)
+/// [0x00, 0x22, 0x00, ...zeros]  (x3, phase 0)
+/// [0x00, 0x22, 0x01, ...zeros]  (x1, phase 1)
+/// [0x00, 0x22, 0x02, ...zeros]  (x1, phase 2)
 /// ```
+///
+/// NOTE: Previous implementation had an extra 0x00 padding byte before the
+/// command, placing 0x22 at byte[2] instead of byte[1]. This was inconsistent
+/// with the SteamVR driver's format where byte[1] is always the command byte
+/// (matching LED=0x4C, Fan=0x46, Brightness=0x49 which all use byte[1]).
 ///
 /// Sent as `send_feature_report` calls via HIDIOCSFEATURE ioctl.
 /// Falls back to write() (OUTPUT report) if ioctl returns EPIPE.
 pub fn build_power_on_sequence() -> Vec<[u8; REPORT_SIZE]> {
     let mut packets = Vec::with_capacity(5);
 
-    // Packets 1-3: 00 22 00 00
+    // Packets 1-3: SetWorkState phase 0
     for _ in 0..3 {
-        let mut report = [0u8; REPORT_SIZE];
-        report[0] = POWER_ON_REPORT_ID;
-        report[1] = 0x00;
-        report[2] = 0x22;
-        report[3] = 0x00;
-        report[4] = 0x00;
-        packets.push(report);
+        packets.push(build_feature_report(CMD_POWER_ON, &[0x00]));
     }
 
-    // Packet 4: 00 22 01 00
-    {
-        let mut report = [0u8; REPORT_SIZE];
-        report[0] = POWER_ON_REPORT_ID;
-        report[1] = 0x00;
-        report[2] = 0x22;
-        report[3] = 0x01;
-        report[4] = 0x00;
-        packets.push(report);
-    }
+    // Packet 4: SetWorkState phase 1
+    packets.push(build_feature_report(CMD_POWER_ON, &[0x01]));
 
-    // Packet 5: 00 22 02 00
-    {
-        let mut report = [0u8; REPORT_SIZE];
-        report[0] = POWER_ON_REPORT_ID;
-        report[1] = 0x00;
-        report[2] = 0x22;
-        report[3] = 0x02;
-        report[4] = 0x00;
-        packets.push(report);
-    }
+    // Packet 5: SetWorkState phase 2
+    packets.push(build_feature_report(CMD_POWER_ON, &[0x02]));
 
     packets
 }
@@ -807,26 +789,22 @@ mod tests {
     fn test_power_on_sequence_content() {
         let seq = build_power_on_sequence();
 
-        // Packets 0-2: report_id=0x00, 00 22 00 00
-        for i in 0..3 {
+        // All packets: report_id=0x00, cmd=0x22 (SetWorkState) at byte[1]
+        for i in 0..5 {
             assert_eq!(seq[i][0], POWER_ON_REPORT_ID);
-            assert_eq!(seq[i][1], 0x00);
-            assert_eq!(seq[i][2], 0x22);
-            assert_eq!(seq[i][3], 0x00);
-            assert_eq!(seq[i][4], 0x00);
+            assert_eq!(seq[i][1], CMD_POWER_ON); // 0x22 at byte[1], not byte[2]
         }
 
-        // Packet 3: report_id=0x00, 00 22 01 00
-        assert_eq!(seq[3][0], POWER_ON_REPORT_ID);
-        assert_eq!(seq[3][2], 0x22);
-        assert_eq!(seq[3][3], 0x01);
-        assert_eq!(seq[3][4], 0x00);
+        // Packets 0-2: phase 0
+        for i in 0..3 {
+            assert_eq!(seq[i][2], 0x00);
+        }
 
-        // Packet 4: report_id=0x00, 00 22 02 00
-        assert_eq!(seq[4][0], POWER_ON_REPORT_ID);
-        assert_eq!(seq[4][2], 0x22);
-        assert_eq!(seq[4][3], 0x02);
-        assert_eq!(seq[4][4], 0x00);
+        // Packet 3: phase 1
+        assert_eq!(seq[3][2], 0x01);
+
+        // Packet 4: phase 2
+        assert_eq!(seq[4][2], 0x02);
     }
 
     // -- fan speed clamping ---
