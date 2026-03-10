@@ -19,11 +19,10 @@ jobs:
     name: Fast Check (self-hosted)
     if: vars.USE_SELFHOSTED == 'true'
     runs-on: tinyland-nix
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
-      # ARC runners have Nix pre-installed — use setup-flywheel for cache config
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: tinyland-inc/GloriousFlywheel/.github/actions/setup-flywheel@main
         with:
