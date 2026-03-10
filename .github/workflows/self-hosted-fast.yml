@@ -30,6 +30,7 @@ jobs:
           attic-cache: ${{ env.ATTIC_CACHE || 'main' }}
 
       - uses: ryanccn/attic-action@v0
+        continue-on-error: true
         if: env.ATTIC_SERVER != ''
         with:
           endpoint: ${{ env.ATTIC_SERVER }}
@@ -67,6 +68,7 @@ jobs:
           attic-cache: ${{ env.ATTIC_CACHE || 'main' }}
 
       - uses: ryanccn/attic-action@v0
+        continue-on-error: true
         if: env.ATTIC_SERVER != ''
         with:
           endpoint: ${{ env.ATTIC_SERVER }}
@@ -119,6 +121,7 @@ jobs:
           attic-cache: ${{ env.ATTIC_CACHE || 'main' }}
 
       - uses: ryanccn/attic-action@v0
+        continue-on-error: true
         if: env.ATTIC_SERVER != ''
         with:
           endpoint: ${{ env.ATTIC_SERVER }}
