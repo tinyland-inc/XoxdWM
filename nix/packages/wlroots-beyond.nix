@@ -1,4 +1,4 @@
-# Patched wlroots 0.18 with Bigscreen Beyond non_desktop detection
+# Patched wlroots with Bigscreen Beyond non_desktop detection
 #
 # The Beyond 2e headset lacks an EDID quirk in most kernels, so compositors
 # treat DP-2 as a regular monitor.  This patch forces non_desktop=true when
