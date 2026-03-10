@@ -158,14 +158,14 @@ setup_script := project_root + "/packaging/scripts/exwm-vr-setup"
 [group('vr')]
 beyond-remote host command:
     @echo "=== {{host}}: {{command}} ==="
-    scp -q "{{setup_script}}" "{{project_root}}/packaging/udev/99-exwm-vr.rules" "{{project_root}}/packaging/scripts/beyond-power-on" "{{project_root}}/packaging/systemd/exwm-vr-beyond-power.service" "{{project_root}}/packaging/sway/config" "{{project_root}}/packaging/sway/status.sh" jess@{{host}}:/tmp/
+    scp -q "{{setup_script}}" "{{project_root}}/packaging/udev/99-exwm-vr.rules" "{{project_root}}/packaging/scripts/beyond-power-on" "{{project_root}}/packaging/systemd/exwm-vr-beyond-power.service" "{{project_root}}/packaging/sway/config" "{{project_root}}/packaging/sway/status.sh" "{{project_root}}/patches/wlroots-bigscreen-non-desktop.patch" "{{project_root}}/patches/amd-bsb-dsc-fix.patch" "{{project_root}}/patches/bigscreen-beyond-edid.patch" jess@{{host}}:/tmp/
     ssh jess@{{host}} "chmod +x /tmp/exwm-vr-setup /tmp/beyond-power-on && mv -f /tmp/config /tmp/exwm-sway-config 2>/dev/null; mv -f /tmp/status.sh /tmp/exwm-sway-status.sh 2>/dev/null; /tmp/exwm-vr-setup {{command}}"
 
 # Same as beyond-remote but wraps in sudo (prompts for password).
 [group('vr')]
 beyond-remote-sudo host command:
     @echo "=== {{host}}: sudo {{command}} ==="
-    scp -q "{{setup_script}}" "{{project_root}}/packaging/udev/99-exwm-vr.rules" "{{project_root}}/packaging/scripts/beyond-power-on" "{{project_root}}/packaging/systemd/exwm-vr-beyond-power.service" "{{project_root}}/packaging/sway/config" "{{project_root}}/packaging/sway/status.sh" jess@{{host}}:/tmp/
+    scp -q "{{setup_script}}" "{{project_root}}/packaging/udev/99-exwm-vr.rules" "{{project_root}}/packaging/scripts/beyond-power-on" "{{project_root}}/packaging/systemd/exwm-vr-beyond-power.service" "{{project_root}}/packaging/sway/config" "{{project_root}}/packaging/sway/status.sh" "{{project_root}}/patches/wlroots-bigscreen-non-desktop.patch" "{{project_root}}/patches/amd-bsb-dsc-fix.patch" "{{project_root}}/patches/bigscreen-beyond-edid.patch" jess@{{host}}:/tmp/
     ssh jess@{{host}} "chmod +x /tmp/exwm-vr-setup /tmp/beyond-power-on && mv -f /tmp/config /tmp/exwm-sway-config 2>/dev/null; mv -f /tmp/status.sh /tmp/exwm-sway-status.sh 2>/dev/null; echo 'Running with sudo...' && sudo /tmp/exwm-vr-setup {{command}}"
 
 # Shorthand aliases for common operations
@@ -190,6 +190,11 @@ beyond-setup host="honey":
 beyond-gpu-tools host="honey":
     @echo "Installing GPU tools on {{host}} (sudo required)..."
     just beyond-remote-sudo {{host}} gpu-tools
+
+[group('vr')]
+beyond-display-init host="honey":
+    @echo "Beyond display init on {{host}} (sudo required)..."
+    just beyond-remote-sudo {{host}} beyond-display-init
 
 [group('vr')]
 beyond-power-on host="honey" *args="":
@@ -230,6 +235,53 @@ beyond-download-config host="honey":
 beyond-oobe host="honey":
     @echo "Running full OOBE on {{host}}..."
     just beyond-remote {{host}} beyond-oobe
+
+[group('vr')]
+beyond-kernel-dsc-fix host="honey":
+    @echo "Patching amdgpu DSC QP tables on {{host}} (sudo required)..."
+    just beyond-remote-sudo {{host}} kernel-dsc-fix
+
+# Build XR kernel from source with all patches on remote host.
+# Optionally pass kernel version: just beyond-kernel-build honey 6.19.5
+[group('vr')]
+beyond-kernel-build host="honey" *args="":
+    @echo "Building XR kernel on {{host}} (sudo required, takes ~30min)..."
+    scp -q "{{setup_script}}" "{{project_root}}/patches/bigscreen-beyond-edid.patch" "{{project_root}}/patches/0007-vesa-dsc-bpp.patch" jess@{{host}}:/tmp/
+    ssh jess@{{host}} "chmod +x /tmp/exwm-vr-setup && sudo /tmp/exwm-vr-setup kernel-build {{args}}"
+
+# ── kernel (linux-xr) ─────────────────────────────────
+
+linux_xr_repo := "Jesssullivan/linux-xr"
+
+# Download + install latest XR kernel RPM on remote host.
+# Usage: just beyond-kernel-install honey v6.19.5-xr1
+[group('vr')]
+beyond-kernel-install host tag:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Installing kernel-xr {{tag}} on {{host}} ==="
+    gh release download "{{tag}}" -R "{{linux_xr_repo}}" \
+        -p "kernel-xr-*.x86_64.rpm" -D /tmp/kernel-xr-rpms/ --clobber
+    scp /tmp/kernel-xr-rpms/kernel-xr-*.x86_64.rpm jess@{{host}}:/tmp/
+    ssh jess@{{host}} "sudo dnf install -y /tmp/kernel-xr-*.x86_64.rpm"
+    echo "Installed. Reboot {{host}} to activate."
+
+# Trigger linux-xr CI rebuild (when patches change).
+[group('vr')]
+beyond-kernel-trigger kversion="6.19.5" xr_release="1" rt_version="6.19.3-rt1":
+    gh workflow run build-kernel.yml -R "{{linux_xr_repo}}" \
+        -f kernel_version="{{kversion}}" \
+        -f xr_release="{{xr_release}}" \
+        -f rt_version="{{rt_version}}"
+    @echo "Triggered. Watch: gh run list -R {{linux_xr_repo}}"
+
+# Verify XR kernel install on remote host.
+[group('vr')]
+beyond-kernel-verify host="honey":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Kernel verification on {{host}} ==="
+    ssh jess@{{host}} "uname -r && zcat /proc/config.gz 2>/dev/null | grep -E 'HZ=|PREEMPT_RT|DRM_AMD_DC_DSC|USB_HIDDEV' || grep -E 'HZ=|PREEMPT_RT|DRM_AMD_DC_DSC|USB_HIDDEV' /boot/config-\$(uname -r)"
 
 # ── dev ────────────────────────────────────────────────
 

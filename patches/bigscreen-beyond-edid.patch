@@ -22,7 +22,7 @@ index XXXXXXX..YYYYYYY 100644
  	EDID_QUIRK('A', 'U', 'O', 0x305c, EDID_QUIRK_FORCE_10BPC),
 
 +	/* Bigscreen Beyond VR Headset */
-+	EDID_QUIRK('B', 'I', 'G', 0x1234, EDID_QUIRK_NON_DESKTOP),
++	EDID_QUIRK('B', 'I', 'G', 0x1234, BIT(EDID_QUIRK_NON_DESKTOP)),
 +
  	/* BOE model on HP Pavilion 15-n233sl */
  	EDID_QUIRK('B', 'O', 'E', 0x0786, EDID_QUIRK_NO_EDID_QUIRK_FORCE_6BPC),
