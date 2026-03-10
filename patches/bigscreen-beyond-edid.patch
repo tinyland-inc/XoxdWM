@@ -5,24 +5,27 @@ The Bigscreen Beyond is a non-desktop output and should be marked as
 such. Without this quirk, desktop environments treat it as a regular
 monitor instead of a VR headset.
 
-EDID manufacturer code: "BIG", product: 0x1234
+EDID manufacturer code: "BIG" (PnP ID 0x0927)
+- Product 0x1234: Bigscreen Beyond (original)
+- Product 0x5095: Bigscreen Beyond 2e
 
 Ref: https://www.phoronix.com/news/Linux-Bigscreen-Beyond-VR
 Ref: https://www.mail-archive.com/dri-devel@lists.freedesktop.org/msg493878.html
 ---
- drivers/gpu/drm/drm_edid.c | 3 +++
- 1 file changed, 3 insertions(+)
+ drivers/gpu/drm/drm_edid.c | 4 ++++
+ 1 file changed, 4 insertions(+)
 
 diff --git a/drivers/gpu/drm/drm_edid.c b/drivers/gpu/drm/drm_edid.c
 index XXXXXXX..YYYYYYY 100644
 --- a/drivers/gpu/drm/drm_edid.c
 +++ b/drivers/gpu/drm/drm_edid.c
-@@ -194,6 +194,9 @@ static const struct edid_quirk {
+@@ -194,6 +194,10 @@ static const struct edid_quirk {
  	/* AUO laptop panel produces high CRC errors */
  	EDID_QUIRK('A', 'U', 'O', 0x305c, EDID_QUIRK_FORCE_10BPC),
 
-+	/* Bigscreen Beyond VR Headset */
++	/* Bigscreen Beyond VR Headsets */
 +	EDID_QUIRK('B', 'I', 'G', 0x1234, BIT(EDID_QUIRK_NON_DESKTOP)),
++	EDID_QUIRK('B', 'I', 'G', 0x5095, BIT(EDID_QUIRK_NON_DESKTOP)),
 +
  	/* BOE model on HP Pavilion 15-n233sl */
  	EDID_QUIRK('B', 'O', 'E', 0x0786, EDID_QUIRK_NO_EDID_QUIRK_FORCE_6BPC),
