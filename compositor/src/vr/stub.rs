@@ -35,9 +35,39 @@ pub enum ReferenceSpaceType {
     View,
 }
 
+/// Stub HMD info for headless builds.
+pub struct HmdInfo {
+    pub system_name: String,
+    pub vendor_id: u32,
+    pub max_width: u32,
+    pub max_height: u32,
+    pub max_layers: u32,
+    pub orientation_tracking: bool,
+    pub position_tracking: bool,
+    pub recommended_width: u32,
+    pub recommended_height: u32,
+}
+
+impl Default for HmdInfo {
+    fn default() -> Self {
+        Self {
+            system_name: "none".to_string(),
+            vendor_id: 0,
+            max_width: 0,
+            max_height: 0,
+            max_layers: 0,
+            orientation_tracking: false,
+            position_tracking: false,
+            recommended_width: 0,
+            recommended_height: 0,
+        }
+    }
+}
+
 /// Stub VR state when OpenXR is not compiled in.
 pub struct VrState {
     pub enabled: bool,
+    pub hmd_info: HmdInfo,
     pub scene: VrScene,
     pub hmd_manager: HmdManager,
     pub interaction: VrInteraction,
@@ -65,6 +95,7 @@ impl Default for VrState {
     fn default() -> Self {
         Self {
             enabled: false,
+            hmd_info: HmdInfo::default(),
             scene: VrScene::new(),
             hmd_manager: HmdManager::new(),
             interaction: VrInteraction::new(),
