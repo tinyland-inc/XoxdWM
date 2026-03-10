@@ -1,9 +1,8 @@
 name: Self-Hosted Fast CI
 
-# Fast CI path for self-hosted runners with warm Nix/Attic caches.
-# Combines build + test into minimal jobs for quick iteration.
-# Only runs when USE_SELFHOSTED is enabled; falls through to
-# standard CI workflows on GitHub-hosted runners.
+# Fast CI path for self-hosted ARC runners with pre-installed Nix
+# and warm Attic caches. Only runs when USE_SELFHOSTED is enabled;
+# ci.yml handles the ubuntu-latest fallback path.
 
 on:
   push:
@@ -24,7 +23,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: cachix/install-nix-action@v30
+      # ARC runners have Nix pre-installed — use setup-flywheel for cache config
+      - uses: tinyland-inc/GloriousFlywheel/.github/actions/setup-flywheel@main
+        with:
+          attic-cache: ${{ env.ATTIC_CACHE || 'main' }}
+
       - uses: ryanccn/attic-action@v0
         if: env.ATTIC_SERVER != ''
         with:
@@ -57,7 +60,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: cachix/install-nix-action@v30
+      - uses: tinyland-inc/GloriousFlywheel/.github/actions/setup-flywheel@main
+        with:
+          attic-cache: ${{ env.ATTIC_CACHE || 'main' }}
+
       - uses: ryanccn/attic-action@v0
         if: env.ATTIC_SERVER != ''
         with:
@@ -105,7 +111,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: cachix/install-nix-action@v30
+      - uses: tinyland-inc/GloriousFlywheel/.github/actions/setup-flywheel@main
+        with:
+          attic-cache: ${{ env.ATTIC_CACHE || 'main' }}
+
       - uses: ryanccn/attic-action@v0
         if: env.ATTIC_SERVER != ''
         with:

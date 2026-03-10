@@ -11,68 +11,60 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# CI runs on ubuntu-latest with cachix/install-nix-action.
+# Self-hosted runners use self-hosted-fast.yml instead (USE_SELFHOSTED gate).
+# Both workflows trigger on push — they don't overlap.
+
 jobs:
   byte-compile:
     name: Byte Compile
-    runs-on: ${{ vars.USE_SELFHOSTED == 'true' && 'tinyland-nix' || 'ubuntu-latest' }}
-    timeout-minutes: 15
+    if: vars.USE_SELFHOSTED != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v30
-      - uses: ryanccn/attic-action@v0
-        if: env.ATTIC_SERVER != ''
-        with:
-          endpoint: ${{ env.ATTIC_SERVER }}
-          cache: ${{ env.ATTIC_CACHE }}
-          token: ${{ secrets.ATTIC_TOKEN }}
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+        continue-on-error: true
       - name: Byte-compile all Elisp
         run: nix develop --command just build
 
   ert-test:
     name: ERT Tests
-    runs-on: ${{ vars.USE_SELFHOSTED == 'true' && 'tinyland-nix' || 'ubuntu-latest' }}
-    timeout-minutes: 15
+    if: vars.USE_SELFHOSTED != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v30
-      - uses: ryanccn/attic-action@v0
-        if: env.ATTIC_SERVER != ''
-        with:
-          endpoint: ${{ env.ATTIC_SERVER }}
-          cache: ${{ env.ATTIC_CACHE }}
-          token: ${{ secrets.ATTIC_TOKEN }}
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+        continue-on-error: true
       - name: Run ERT test suite
         run: nix develop --command just test
 
   lint:
     name: Lint Elisp
-    runs-on: ${{ vars.USE_SELFHOSTED == 'true' && 'tinyland-nix' || 'ubuntu-latest' }}
-    timeout-minutes: 15
+    if: vars.USE_SELFHOSTED != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v30
-      - uses: ryanccn/attic-action@v0
-        if: env.ATTIC_SERVER != ''
-        with:
-          endpoint: ${{ env.ATTIC_SERVER }}
-          cache: ${{ env.ATTIC_CACHE }}
-          token: ${{ secrets.ATTIC_TOKEN }}
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+        continue-on-error: true
       - name: Lint Elisp (strict byte-compile)
         run: nix develop --command just lint-elisp
 
   nix-build:
     name: Nix Build
-    runs-on: ${{ vars.USE_SELFHOSTED == 'true' && 'tinyland-nix' || 'ubuntu-latest' }}
-    timeout-minutes: 15
+    if: vars.USE_SELFHOSTED != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v30
-      - uses: ryanccn/attic-action@v0
-        if: env.ATTIC_SERVER != ''
-        with:
-          endpoint: ${{ env.ATTIC_SERVER }}
-          cache: ${{ env.ATTIC_CACHE }}
-          token: ${{ secrets.ATTIC_TOKEN }}
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+        continue-on-error: true
       - name: Check flake evaluates
         run: nix flake check --no-build
       - name: Build devShell
@@ -80,18 +72,15 @@ jobs:
 
   changelog-validate:
     name: Changelog Validate
-    runs-on: ${{ vars.USE_SELFHOSTED == 'true' && 'tinyland-nix' || 'ubuntu-latest' }}
-    timeout-minutes: 5
+    if: vars.USE_SELFHOSTED != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - uses: cachix/install-nix-action@v30
-      - uses: ryanccn/attic-action@v0
-        if: env.ATTIC_SERVER != ''
-        with:
-          endpoint: ${{ env.ATTIC_SERVER }}
-          cache: ${{ env.ATTIC_CACHE }}
-          token: ${{ secrets.ATTIC_TOKEN }}
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+        continue-on-error: true
       - name: Validate git-cliff config
         run: nix develop --command git-cliff --validate cliff.toml
