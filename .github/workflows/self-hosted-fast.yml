@@ -84,7 +84,7 @@ jobs:
       - name: sccache stats
         if: always()
         shell: bash
-        run: sccache --show-stats
+        run: command -v sccache &>/dev/null && sccache --show-stats || echo "sccache not active"
 
       - name: Push to Attic cache
         if: env.ATTIC_SERVER != '' && github.event_name == 'push'

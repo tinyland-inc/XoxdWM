@@ -1,13 +1,26 @@
 name: Setup sccache
-description: Configure sccache for Rust builds with GHA cache backend
+description: Configure sccache for Rust builds with GHA cache backend (soft dependency)
 
 runs:
   using: composite
   steps:
     - uses: mozilla-actions/sccache-action@v0.0.6
+      continue-on-error: true
+      id: sccache
 
     - name: Configure sccache environment
       shell: bash
       run: |
-        echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-        echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+        # Only set RUSTC_WRAPPER if sccache is available and functional
+        if command -v sccache &>/dev/null && sccache --version &>/dev/null; then
+          # Verify the cache backend is reachable
+          if SCCACHE_GHA_ENABLED=true sccache rustc -vV &>/dev/null; then
+            echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+            echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+            echo "::notice::sccache enabled with GHA cache backend"
+          else
+            echo "::warning::sccache cache backend unreachable — building without cache"
+          fi
+        else
+          echo "::warning::sccache not available — building without cache"
+        fi

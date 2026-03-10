@@ -56,7 +56,7 @@ jobs:
       - name: sccache stats
         if: always()
         shell: bash
-        run: sccache --show-stats
+        run: command -v sccache &>/dev/null && sccache --show-stats || echo "sccache not active"
 
   build-headless:
     name: Build x86_64 (headless)
@@ -86,7 +86,7 @@ jobs:
       - name: sccache stats
         if: always()
         shell: bash
-        run: sccache --show-stats
+        run: command -v sccache &>/dev/null && sccache --show-stats || echo "sccache not active"
 
   ert-tests:
     name: ERT Tests
