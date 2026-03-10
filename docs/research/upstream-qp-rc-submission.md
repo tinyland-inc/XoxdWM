@@ -1,6 +1,6 @@
 # Upstream Submission: DSC QP Table + RC Offset Fixes
 
-## Status: PLANNED
+## Status: PLANNED (kernel built, pending validation on honey)
 
 ## Summary
 
@@ -68,10 +68,16 @@ Cc: stable@vger.kernel.org
 
 ## Timeline
 
-- Submit: after linux-xr kernel validates fix on honey
+- linux-xr kernel RPMs built via CI (v6.19.5-xr1) — 2026-03-10
+- Submit: after kernel validates on honey (install + DSC test pending)
 - Expected review: 1-2 weeks
 - Expected merge: 3-4 weeks → 7.1-rc1 (~June 2026)
 - Cc: stable → backport to 6.19.x, 6.12.x LTS within weeks of merge
+
+Note: CachyOS already carries the combined patch (0007-vesa-dsc-bpp.patch)
+which includes the QP/RC fix plus additional VESA DisplayID parser changes.
+This upstream submission covers ONLY the QP/RC portion, which is a clean
+self-contained fix independent of the larger VESA DisplayID series.
 
 ## References
 

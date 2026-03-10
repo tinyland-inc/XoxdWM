@@ -99,9 +99,9 @@ nominal BPP.
 
 ## Next Verification Steps
 
-**Step A**: Install linux-xr kernel with VESA DisplayID patch on honey. Check if
-BPP=128 works through the proper `dsc_fixed_bits_per_pixel_x16` code path. This is
-imminent and is the highest-priority action.
+**Step A**: Install linux-xr kernel (v6.19.5-xr1) on honey. Check if BPP=128 works
+through the proper `dsc_fixed_bits_per_pixel_x16` code path. XR kernel RPMs are built;
+install via `just beyond-kernel-install honey v6.19.5-xr1`. Highest-priority action.
 
 **Step B**: If still fails, capture PPS from
 `/sys/kernel/debug/dri/1/DP-2/dsc_pic_parameter_set` and compare against the PPS
