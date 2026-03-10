@@ -67,21 +67,29 @@
           default = self.homeManagerModules.exwm-vr;
         };
 
-        # Kernel overlay: Bigscreen Beyond EDID non-desktop quirk patch
+        # Kernel overlay: XR kernel patches for Bigscreen Beyond 2e + AMD DSC
+        #
+        # Patches applied:
+        #   1. bigscreen-beyond-edid.patch — EDID non-desktop quirk (BIG/0x1234)
+        #   2. 0007-vesa-dsc-bpp.patch — CachyOS combined: DSC QP tables + RC ofs[11]
+        #      + VESA DisplayID DSC BPP parser + amdgpu_dm dsc_fixed_bits_per_pixel_x16
+        #
         # Usage in NixOS config:
-        #   boot.kernelPackages = pkgs.linuxPackages_latest.extend (self: super: {
-        #     kernel = super.kernel.override {
-        #       kernelPatches = [{ name = "bigscreen-beyond-non-desktop";
-        #         patch = ewwm.packages.${system}.bigscreen-beyond-edid-patch; }];
-        #     };
-        #   });
+        #   nixpkgs.overlays = [ ewwm.overlays.kernel-beyond ];
+        #   boot.kernelPackages = pkgs.linuxPackages_beyond;
         overlays.kernel-beyond = final: prev: {
           linuxPackages_beyond = prev.linuxPackages_latest.extend (lpSelf: lpPrev: {
             kernel = lpPrev.kernel.override {
-              kernelPatches = (lpPrev.kernel.kernelPatches or []) ++ [{
-                name = "bigscreen-beyond-non-desktop";
-                patch = ./patches/bigscreen-beyond-edid.patch;
-              }];
+              kernelPatches = (lpPrev.kernel.kernelPatches or []) ++ [
+                {
+                  name = "bigscreen-beyond-non-desktop";
+                  patch = ./patches/bigscreen-beyond-edid.patch;
+                }
+                {
+                  name = "vesa-dsc-bpp-cachyos";
+                  patch = ./patches/0007-vesa-dsc-bpp.patch;
+                }
+              ];
             };
           });
         };

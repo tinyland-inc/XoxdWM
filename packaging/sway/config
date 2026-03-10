@@ -23,8 +23,8 @@
 # ── Variables ─────────────────────────────────────────────
 
 set $mod Mod4
-set $term xterm
-set $menu dmenu_run
+set $term kitty
+set $menu dmenu-wl_run
 
 # ── Outputs ───────────────────────────────────────────────
 
@@ -134,6 +134,9 @@ exec_always export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
 # Monado / OpenXR
 exec_always export XRT_COMPOSITOR_FORCE_WAYLAND=1
 exec_always export XRT_COMPOSITOR_WAYLAND_CONNECTOR=DP-2
+
+# Beyond HMD — expose hidraw to Proton for Bigscreen companion app
+exec_always export PROTON_ENABLE_HIDRAW=0x35BD/0x0101
 
 # Wayland-native apps
 exec_always export MOZ_ENABLE_WAYLAND=1

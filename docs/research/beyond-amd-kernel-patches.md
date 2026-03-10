@@ -53,10 +53,11 @@ Adjusts min QP for indices 9, 13, and 14 to match the corrected range.
 
 #### c. Rate Control Offset (`rc_calc_fpu.c`, line ~126)
 ```diff
--    *p++ = (bpp <=  6) ? (-12) : ((bpp >=  8) ? (-10) : (-12 + ...));
-+    *p++ = (bpp <=  6) ? (-12) : ((bpp >=  8) ? (-12) : (-12 + ...));
+ 		*p++ = -10;                                           // ofs[10] - unchanged
+-		*p++ = (bpp <=  6) ? (-12) : ((bpp >=  8) ? (-10) : (-12 + ...));  // ofs[11]
++		*p++ = (bpp <=  6) ? (-12) : ((bpp >=  8) ? (-12) : (-12 + ...));  // ofs[11]
 ```
-Changes the rate control offset from -10 to -12 when BPP >= 8. This tightens the rate control at the 8 BPP operating point.
+Changes the ofs[11] rate control offset from -10 to -12 when BPP >= 8. This tightens the rate control at the 8 BPP operating point. **Note**: ofs[10] (`*p++ = -10`) is left unchanged — the fix is specifically on ofs[11] (the conditional BPP>=8 position).
 
 **Why the Beyond triggers this bug**: The Beyond uses DSC with 8 bits-per-pixel compression at 3840x1920@90Hz. The stock kernel's QP tables produce invalid quantization at exactly 8 BPP in 4:4:4 mode, causing "rainbow static" — the DSC decoder on the Beyond's panel receives garbled rate control metadata and produces psychedelic noise instead of the intended image.
 
@@ -84,7 +85,16 @@ stream->timing.dsc_fixed_bits_per_pixel_x16 = info->dp_dsc_bpp_x16;
 ```
 This passes the EDID-declared DSC BPP directly to the AMD display hardware, bypassing the kernel's DSC BPP negotiation algorithm.
 
-**Note for Beyond**: The Beyond 2e does NOT have a VESA vendor-specific block in its EDID (verified by hex dump analysis). This means Part 2+3 of the combined patch won't directly benefit the Beyond — the kernel will still use its own DSC BPP calculation. However, the QP table fixes (Part 1) are essential.
+**CORRECTION (2026-03-09)**: The Beyond 2e DOES have a VESA vendor-specific DisplayID
+block in its EDID at offset 0xB0:
+```
+7E 00 07 3A 02 92 81 00 08 00 00 00
+tag=0x7E, len=7, OUI=3A:02:92 (VESA), BPP_int=8, BPP_frac=0 → BPP=8.0 (128 x16)
+```
+Kernel 6.19.5 logs "Unexpected VESA vendor block size" because the MSO parser doesn't
+recognize the DSC BPP format. Parts 2+3 of the CachyOS patch ARE critical for Beyond —
+they add the parser that reads `dsc_fixed_bits_per_pixel_x16 = 128` from EDID, enabling
+the correct DSC computation code path.
 
 ## Which Patch to Apply
 
@@ -171,9 +181,102 @@ Key indicators:
 - `link_trained=1` (DP link negotiation succeeded)
 - `stream_active=1` (frames being sent)
 
+## BPP Binary Search Results (2026-03-09)
+
+Systematic testing with `dsc_policy_max_target_bpp_limit` binary patching reveals a
+hard threshold between BPP=9.0 and BPP=8.0:
+
+| BPP x16 | Real BPP | initial_xmit_delay | initial_offset | Displays |
+|---------|----------|-------------------|----------------|----------|
+| 182 | 11.375 | 360 | 3168 | ON (grey noise) |
+| 176 | 11.0 | 372 | 3840 | ON (grey noise) |
+| 144 | 9.0 | 455 | 5888 | ON (grey noise) |
+| 128 | 8.0 | 512 | 6144 | **OFF** |
+
+**Hypothesis**: `initial_xmit_delay = 512 = 0x200` overflows a 9-bit register in
+the ICE40 FPGA DSC decoder, causing immediate decode failure. This needs verification
+via:
+1. Formal analysis of ICE40 DSC decoder bitstream (Yosys/SymbiYosys)
+2. USB capture of NVIDIA driver's PPS on Windows (known working)
+3. Upstream `dsc_fixed_bits_per_pixel_x16` code path (may compute differently)
+
+## Kernel Build Strategy
+
+### Immediate: Rocky 10 Kernel Build with Upstream Patches
+
+```bash
+# 1. Get kernel source
+rpm -i kernel-ml-6.19.5-1.el10.elrepo.src.rpm
+cd ~/rpmbuild/SOURCES/
+
+# 2. Apply CachyOS 0007 patch (contains all three fixes)
+# Or apply upstream 7-patch series for VESA DisplayID DSC BPP
+
+# 3. Build RPMs
+rpmbuild -bb ~/rpmbuild/SPECS/kernel-ml.spec
+
+# 4. Install and test
+sudo dnf install ~/rpmbuild/RPMS/x86_64/kernel-ml-*.rpm
+```
+
+### Long-term: Reproducible XR Kernel via Nix
+
+```nix
+# nix/kernel/xr-kernel.nix
+{ lib, linuxKernel, fetchpatch, ... }:
+linuxKernel.kernels.linux_6_19.override {
+  structuredExtraConfig = with lib.kernel; {
+    PREEMPT_RT = yes;
+    DRM_AMD_DC_DSC = yes;
+    HZ_1000 = yes;  # VR latency
+  };
+  kernelPatches = [
+    { name = "vesa-displayid-dsc-bpp";
+      patch = ./patches/0007-vesa-dsc-bpp.patch; }
+    { name = "bigscreen-beyond-edid";
+      patch = ../../patches/bigscreen-beyond-edid.patch; }
+  ];
+};
+```
+
+### CI Pipeline
+
+- Build kernel on each patch update (GitHub Actions)
+- Automated PPS capture + validation against known-good values
+- Test matrix: {kernel version} × {patch set} × {GPU generation}
+- Publish RPMs to private repo for honey deployment
+
+### FPGA Formal Verification (Future)
+
+The ICE40 HX8K DSC decoder is the ultimate source of truth for what PPS parameters
+work. Formal verification approaches:
+
+1. **Bitstream extraction**: `icestorm` tools to reverse-engineer ICE40 config
+2. **Model generation**: Yosys to extract logic model from bitstream
+3. **Property checking**: SymbiYosys to verify register width assumptions
+4. **Reference decoder**: Software model matching the FPGA's actual behavior
+5. **Boundary testing**: Systematically vary PPS fields to map acceptance ranges
+
+## Patch Status (our repo)
+
+| Patch | File | Status |
+|-------|------|--------|
+| EDID non_desktop quirk | `patches/bigscreen-beyond-edid.patch` | ✓ Correct |
+| DSC QP + RC fix | `patches/amd-bsb-dsc-fix.patch` | ✓ Correct (ofs[11] fixed) |
+| wlroots non_desktop | `patches/wlroots-bigscreen-non-desktop.patch` | ✓ Correct |
+| VESA DisplayID DSC BPP | not yet in repo | **NEEDED** — fetch from CachyOS or upstream |
+
+**Action items**:
+1. ~~Fix `amd-bsb-dsc-fix.patch` to target ofs[11] instead of ofs[10]~~ DONE
+2. Add CachyOS 0007 patch (or upstream 7-patch series) to repo
+3. Build kernel RPMs with all patches
+4. Test on honey with full pipeline
+
 ## References
 
 - CachyOS kernel-patches: `https://github.com/CachyOS/kernel-patches/tree/master/6.19`
-- amd-bsb-dsc-fix: `https://github.com/matte-schwartz/amd-bsb-dsc-fix`
+- raika-xino amd-bsb-dsc-fix: `https://github.com/raika-xino/amd-bsb-dsc-fix`
+- Upstream VESA DisplayID series: lore.kernel.org (search "VESA DisplayID fixed DSC BPP")
 - Monado VR runtime: `https://monado.freedesktop.org/`
-- Beyond USB-C port info: Bigscreen support documentation
+- Yosys/IceStorm: `https://github.com/YosysHQ/yosys`, `https://github.com/YosysHQ/icestorm`
+- VESA DSC 1.2a specification (section 3.2: RC parameter computation)

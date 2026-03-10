@@ -14,6 +14,11 @@
 #   beyond-hid-test  Test HID device access
 #   gpu-tools        Install Vulkan tools + GPU diagnostics
 #   beyond-power-on  Send HID power-on sequence to Beyond display
+#   beyond-display-init  Set DSC BPP + link rate + HID panel init (sudo)
+#   beyond-monitor       Continuous display pipeline monitor (sudo)
+#   beyond-dsc-flash     Toggle DSC to trigger FPGA re-init flash (sudo)
+#   beyond-dsc-sweep     Try different DSC BPP values (sudo, destructive)
+#   kernel-dsc-fix   Patch amdgpu DSC QP tables for Beyond (reboot needed)
 #   full-setup       Run prereqs + kernel-upgrade (reboot needed after)
 
 set -euo pipefail
@@ -374,38 +379,63 @@ cmd_sway_setup() {
     echo "  seatd: $(systemctl is-active seatd.service 2>/dev/null || echo 'not running')"
     echo
 
-    # Build sway (1.10 for wlroots 0.18 from repos; DRM lease since 1.7)
-    local sway_ver="1.10"
-    local build_dir="/tmp/sway-build"
-    echo "[3/5] Building sway $sway_ver..."
-    if command -v sway >/dev/null 2>&1; then
-        local cur_ver
-        cur_ver=$(sway --version 2>/dev/null | grep -oP '[\d.]+' | head -1)
-        echo "  sway already installed: $cur_ver"
-        if [ "$cur_ver" = "$sway_ver" ]; then
-            echo "  Skipping build (already at $sway_ver)"
-        fi
+    # Build wlroots from source with Bigscreen Beyond non_desktop patch
+    # The patch forces non_desktop=true for Bigscreen Beyond headsets even
+    # on kernels that lack the EDID quirk (BIG/0x1234). Without it, Sway
+    # won't offer DP-2 for DRM lease and Monado can't acquire the display.
+    local wlroots_ver="0.18.2"
+    local wlroots_dir="/tmp/wlroots-build"
+    echo "[3/6] Building patched wlroots $wlroots_ver..."
+    # Ensure XWayland dev headers are available (sway needs wlr_xwayland_create)
+    dnf install -y xorg-x11-server-Xwayland-devel hwdata-devel 2>&1 | tail -3
+    rm -rf "$wlroots_dir"
+    git clone --depth 1 --branch "$wlroots_ver" \
+        https://gitlab.freedesktop.org/wlroots/wlroots.git "$wlroots_dir" 2>&1 | tail -1
+    cd "$wlroots_dir"
+
+    # Apply Bigscreen Beyond non_desktop patch
+    local patch_src="$SCRIPT_DIR/../patches/wlroots-bigscreen-non-desktop.patch"
+    [ ! -f "$patch_src" ] && patch_src="$PROJECT_ROOT/patches/wlroots-bigscreen-non-desktop.patch"
+    [ ! -f "$patch_src" ] && patch_src="/tmp/wlroots-bigscreen-non-desktop.patch"
+    if [ -f "$patch_src" ]; then
+        git apply "$patch_src" 2>/dev/null || patch -p1 < "$patch_src" 2>/dev/null || \
+            echo "  WARNING: patch failed to apply (may already be applied or version mismatch)"
+        echo "  Applied: wlroots-bigscreen-non-desktop.patch"
+    else
+        echo "  WARNING: wlroots patch not found — non_desktop detection may not work"
+        echo "  Expected at: $PROJECT_ROOT/patches/wlroots-bigscreen-non-desktop.patch"
     fi
 
-    if ! command -v sway >/dev/null 2>&1 || [ "$(sway --version 2>/dev/null | grep -oP '[\d.]+' | head -1)" != "$sway_ver" ]; then
-        rm -rf "$build_dir"
-        git clone --depth 1 --branch "$sway_ver" \
-            https://github.com/swaywm/sway.git "$build_dir" 2>&1 | tail -1
-        cd "$build_dir"
-        meson setup build --prefix=/usr/local -Dbuildtype=release 2>&1 | tail -3
-        ninja -C build -j"$(nproc)" 2>&1 | tail -3
-        ninja -C build install 2>&1 | tail -3
-        cd /
-        rm -rf "$build_dir"
-        echo "  Installed: $(sway --version 2>/dev/null || echo 'ERROR')"
-    fi
+    meson setup build --prefix=/usr/local -Dbuildtype=release -Dxwayland=enabled 2>&1 | tail -3
+    ninja -C build -j"$(nproc)" 2>&1 | tail -3
+    ninja -C build install 2>&1 | tail -3
+    ldconfig
+    cd /
+    rm -rf "$wlroots_dir"
+    echo "  Installed: patched wlroots $wlroots_ver"
+    echo
+
+    # Build sway (1.10 for wlroots 0.18; DRM lease since 1.7)
+    local sway_ver="1.10"
+    local build_dir="/tmp/sway-build"
+    echo "[4/6] Building sway $sway_ver..."
+    rm -rf "$build_dir"
+    git clone --depth 1 --branch "$sway_ver" \
+        https://github.com/swaywm/sway.git "$build_dir" 2>&1 | tail -1
+    cd "$build_dir"
+    meson setup build --prefix=/usr/local -Dbuildtype=release 2>&1 | tail -3
+    ninja -C build -j"$(nproc)" 2>&1 | tail -3
+    ninja -C build install 2>&1 | tail -3
+    cd /
+    rm -rf "$build_dir"
+    echo "  Installed: $(sway --version 2>/dev/null || echo 'ERROR')"
     echo
 
     # Build xdg-desktop-portal-wlr (screenshot/screencast portals for sway)
     # NOTE: This does NOT provide DRM lease pass-through. DRM lease works
     # natively through sway's wlr-drm-lease-v1 protocol — but only with
     # native Steam. Flatpak Steam's pressure-vessel proxy filters it out.
-    echo "[4/6] Building xdg-desktop-portal-wlr..."
+    echo "[5/7] Building xdg-desktop-portal-wlr..."
     local portal_ver="0.7.1"
     if ! command -v xdg-desktop-portal-wlr >/dev/null 2>&1; then
         dnf install -y inih-devel systemd-devel pipewire-devel 2>&1 | tail -3
@@ -434,7 +464,7 @@ PORTAL
     echo
 
     # Install config
-    echo "[5/6] Installing sway config..."
+    echo "[6/7] Installing sway config..."
     local cfg_dir="/home/$user/.config/sway"
     mkdir -p "$cfg_dir"
     local cfg_src="$SCRIPT_DIR/../sway/config"
@@ -457,7 +487,7 @@ PORTAL
     echo
 
     # Verify
-    echo "[6/6] Verifying..."
+    echo "[7/7] Verifying..."
     echo "  sway: $(command -v sway 2>/dev/null || echo 'NOT FOUND')"
     echo "  seatd: $(systemctl is-active seatd.service 2>/dev/null)"
     echo "  Xwayland: $(command -v Xwayland 2>/dev/null || echo 'NOT FOUND')"
@@ -737,9 +767,11 @@ cmd_beyond_first_frame() {
         exit 1
     fi
 
-    echo "  Running: $hello_xr -G Vulkan2"
+    echo "  Running: $hello_xr -G Vulkan2 (30s timeout)"
+    # Pipe sleep to stdin: hello_xr reads stdin for key events and exits on
+    # EOF, which happens immediately over SSH without a proper terminal.
     XR_RUNTIME_JSON="${XR_RUNTIME_JSON:-/usr/local/share/openxr/1/openxr_monado.json}" \
-        timeout 30 "$hello_xr" -G Vulkan2 2>&1 | tail -20
+        timeout 30 bash -c "sleep 30 | $hello_xr -G Vulkan2" 2>&1 | tail -20
     local rc=$?
 
     # Cleanup
@@ -967,6 +999,665 @@ cmd_beyond_oobe() {
     echo "    2. Eye calibration: triggered automatically if Bigeye detected"
 }
 
+cmd_kernel_dsc_fix() {
+    _need_root
+    local kver
+    kver=$(uname -r)
+    local amdgpu_mod="/lib/modules/${kver}/kernel/drivers/gpu/drm/amd/amdgpu/amdgpu.ko.xz"
+
+    echo "=== DSC QP Table Fix for Bigscreen Beyond ==="
+    echo "  Kernel: $kver"
+    echo "  Module: $amdgpu_mod"
+    echo
+
+    if [ ! -f "$amdgpu_mod" ]; then
+        echo "ERROR: amdgpu module not found at $amdgpu_mod"
+        exit 1
+    fi
+
+    # 1. Extract and back up original module
+    echo "[1/4] Extracting module..."
+    local orig_ko="/tmp/amdgpu-orig.ko"
+    local patched_ko="/tmp/amdgpu-dsc-patched.ko"
+    if [ ! -f "${amdgpu_mod}.orig" ]; then
+        cp "$amdgpu_mod" "${amdgpu_mod}.orig"
+        echo "  Backed up original to ${amdgpu_mod}.orig"
+    fi
+    unxz -c "${amdgpu_mod}.orig" > "$orig_ko"
+    echo "  Extracted: $(ls -lh "$orig_ko" | awk '{print $5}')"
+
+    # 2. Binary-patch QP tables and RC offset
+    # This approach preserves the exact module binary structure (struct module,
+    # BTF, modversions) avoiding the struct mismatch issues of source rebuilds.
+    echo "[2/4] Binary-patching DSC QP tables..."
+    python3 - "$orig_ko" "$patched_ko" << 'PYSCRIPT'
+import struct, sys
+
+data = bytearray(open(sys.argv[1], 'rb').read())
+bpp_8 = struct.pack('<f', 8.0)
+patches = 0
+
+# QP Max: 444_8bpc_max BPP=8 row indices 10-14: {10,11,11,12,13} -> {11,12,13,13,15}
+old_max = bpp_8 + struct.pack('<15i', 4,4,5,6,7,7,7,8,9,10,10,11,11,12,13)
+new_max = bpp_8 + struct.pack('<15i', 4,4,5,6,7,7,7,8,9,10,11,12,13,13,15)
+off = data.find(old_max)
+if off >= 0:
+    data[off:off+len(new_max)] = new_max
+    patches += 1
+    print(f'  QP max BPP=8 patched at 0x{off:x}')
+else:
+    print('  QP max BPP=8: not found (already patched?)')
+
+# QP Min: 444_8bpc_min BPP=8 row indices 9,13,14: {4,8,12} -> {3,7,13}
+old_min = bpp_8 + struct.pack('<15i', 0,0,1,1,3,3,3,3,3,4,5,5,5,8,12)
+new_min = bpp_8 + struct.pack('<15i', 0,0,1,1,3,3,3,3,3,3,5,5,5,7,13)
+off = data.find(old_min)
+if off >= 0:
+    data[off:off+len(new_min)] = new_min
+    patches += 1
+    print(f'  QP min BPP=8 patched at 0x{off:x}')
+else:
+    print('  QP min BPP=8: not found (already patched?)')
+
+# RC offset: ofs[10] = -10 -> -12 in get_ofs_set()
+# Patch movl $0xfffffff6, 0x28(%rax/rdi) -> movl $0xfffffff4, 0x28(%rax/rdi)
+# within the get_ofs_set function (find via nm)
+import subprocess
+nm = subprocess.run(['nm', sys.argv[1]], capture_output=True, text=True)
+func_addr = None
+for line in nm.stdout.split('\n'):
+    if ' t get_ofs_set' in line and '__pfx' not in line:
+        func_addr = int(line.split()[0], 16)
+        break
+
+if func_addr:
+    # Convert vaddr to file offset using readelf
+    elf = subprocess.run(['readelf', '-S', sys.argv[1]], capture_output=True, text=True)
+    text_addr = text_off = 0
+    for line in elf.stdout.split('\n'):
+        if '.text' in line and 'PROGBITS' in line:
+            parts = line.split()
+            for i, p in enumerate(parts):
+                if p == 'PROGBITS':
+                    text_addr = int(parts[i+1], 16)
+                    text_off = int(parts[i+2], 16)
+                    break
+            break
+    func_file_off = func_addr - text_addr + text_off
+    func_end = func_file_off + 2000
+
+    rc_count = 0
+    # ofs[11] is at offset 0x2c (11*4=44) from the qp_set base pointer.
+    # The compiler may use various register forms for the store.
+    # Pattern: movl $-10, 0x2c(%reg) → movl $-12, 0x2c(%reg)
+    for pattern, replacement, desc in [
+        (b'\xc7\x40\x2c\xf6\xff\xff\xff', b'\xc7\x40\x2c\xf4\xff\xff\xff', 'movl 0x2c(%rax)'),
+        (b'\xc7\x47\x2c\xf6\xff\xff\xff', b'\xc7\x47\x2c\xf4\xff\xff\xff', 'movl 0x2c(%rdi)'),
+        (b'\xc7\x41\x2c\xf6\xff\xff\xff', b'\xc7\x41\x2c\xf4\xff\xff\xff', 'movl 0x2c(%rcx)'),
+        (b'\xc7\x42\x2c\xf6\xff\xff\xff', b'\xc7\x42\x2c\xf4\xff\xff\xff', 'movl 0x2c(%rdx)'),
+        (b'\xc7\x43\x2c\xf6\xff\xff\xff', b'\xc7\x43\x2c\xf4\xff\xff\xff', 'movl 0x2c(%rbx)'),
+        (b'\xc7\x46\x2c\xf6\xff\xff\xff', b'\xc7\x46\x2c\xf4\xff\xff\xff', 'movl 0x2c(%rsi)'),
+    ]:
+        pos = func_file_off
+        while pos < func_end:
+            pos = data.find(pattern, pos)
+            if pos == -1 or pos >= func_end: break
+            print(f'  Patching {desc} -10 -> -12 at file 0x{pos:x}')
+            data[pos:pos+len(pattern)] = replacement
+            rc_count += 1
+            pos += len(pattern)
+    if rc_count:
+        patches += 1
+        print(f'  RC offset: patched {rc_count} ofs[11] stores in get_ofs_set')
+else:
+    print('  RC offset: get_ofs_set not found in symbol table')
+
+# BPP limit: cap dsc_policy_max_target_bpp_limit from 16 -> 8
+# This forces DSC to use 8.0 BPP (128 in x16) matching Beyond EDID target.
+# Without this, kernel computes highest BPP that fits link bandwidth (16.0 at 4 lanes).
+import subprocess as sp2
+nm2 = sp2.run(['nm', sys.argv[1]], capture_output=True, text=True)
+bpp_var_addr = None
+for line in nm2.stdout.split('\n'):
+    if 'dsc_policy_max_target_bpp_limit' in line and '__pfx' not in line and 'set_max' not in line:
+        bpp_var_addr = int(line.split()[0], 16)
+        break
+
+if bpp_var_addr:
+    elf2 = sp2.run(['readelf', '-S', sys.argv[1]], capture_output=True, text=True)
+    d_addr = d_off = 0
+    for line in elf2.stdout.split('\n'):
+        if '.data' in line and 'PROGBITS' in line and '.rela.data' not in line and '.rodata' not in line:
+            parts = line.split()
+            for i, p in enumerate(parts):
+                if p == 'PROGBITS':
+                    d_addr = int(parts[i+1], 16)
+                    d_off = int(parts[i+2], 16)
+                    break
+            break
+    bpp_file_off = bpp_var_addr - d_addr + d_off
+    old_limit = struct.unpack_from('<I', data, bpp_file_off)[0]
+    if old_limit != 8:
+        struct.pack_into('<I', data, bpp_file_off, 8)
+        patches += 1
+        print(f'  BPP limit: {old_limit} -> 8 at file offset 0x{bpp_file_off:x}')
+    else:
+        print('  BPP limit: already set to 8')
+else:
+    print('  BPP limit: dsc_policy_max_target_bpp_limit not found')
+
+open(sys.argv[2], 'wb').write(bytes(data))
+print(f'  Total: {patches} patch groups applied')
+PYSCRIPT
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Binary patching failed"
+        exit 1
+    fi
+
+    # 3. Verify struct module size unchanged
+    echo "[3/4] Verifying module integrity..."
+    local orig_size patched_size
+    orig_size=$(readelf -s "$orig_ko" | grep __this_module | awk '{print $3}')
+    patched_size=$(readelf -s "$patched_ko" | grep __this_module | awk '{print $3}')
+    if [ "$orig_size" != "$patched_size" ]; then
+        echo "ERROR: struct module size changed ($orig_size -> $patched_size)"
+        exit 1
+    fi
+    echo "  struct module: $patched_size bytes (unchanged)"
+
+    # 4. Install
+    echo "[4/4] Installing patched module..."
+    xz -c "$patched_ko" > "$amdgpu_mod"
+    depmod -a
+    echo "  Installed and depmod updated"
+
+    # Done
+    echo "Done."
+    echo
+    echo "  Reboot to load the patched module."
+    echo "  To restore original: cp ${amdgpu_mod}.orig ${amdgpu_mod} && depmod -a"
+}
+
+cmd_kernel_build() {
+    _need_root
+    local kver="${1:-$(uname -r | sed 's/-.*//')}"
+    echo "=== XR Kernel Build ==="
+    echo "  Target kernel: $kver"
+    echo "  Patches: bigscreen-beyond-edid + amd-bsb-dsc-fix"
+    echo
+
+    # Prerequisites
+    echo "[1/6] Checking build dependencies..."
+    local missing=""
+    for pkg in gcc make elfutils-libelf-devel openssl-devel perl bc bison flex rsync; do
+        rpm -q "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
+    done
+    if [ -n "$missing" ]; then
+        echo "  Installing:$missing"
+        dnf install -y $missing
+    else
+        echo "  All build dependencies present"
+    fi
+
+    # Kernel source
+    local srcdir="/usr/src/kernels/xr-${kver}"
+    echo
+    echo "[2/6] Preparing kernel source..."
+    if [ -d "$srcdir" ]; then
+        echo "  Using existing source: $srcdir"
+    else
+        # Try ELRepo SRPM first
+        local srpm
+        srpm=$(find /root/rpmbuild/SRPMS/ -name "kernel-ml-${kver}*.src.rpm" 2>/dev/null | head -1)
+        if [ -z "$srpm" ]; then
+            echo "  Downloading kernel source..."
+            local major_ver="${kver%%.*}"
+            curl -Lo "/tmp/linux-${kver}.tar.xz" \
+                "https://cdn.kernel.org/pub/linux/kernel/v${major_ver}.x/linux-${kver}.tar.xz"
+            mkdir -p "$srcdir"
+            tar -xf "/tmp/linux-${kver}.tar.xz" -C "$srcdir" --strip-components=1
+        else
+            echo "  Extracting from SRPM: $srpm"
+            rpm -i "$srpm" 2>/dev/null
+            local tarball
+            tarball=$(find /root/rpmbuild/SOURCES/ -name "linux-${kver}*.tar*" | head -1)
+            mkdir -p "$srcdir"
+            tar -xf "$tarball" -C "$srcdir" --strip-components=1
+        fi
+    fi
+
+    # Apply patches
+    echo
+    echo "[3/6] Applying XR patches..."
+    cd "$srcdir"
+    local patch_dir="/tmp"
+    # 0007-vesa-dsc-bpp.patch is the CachyOS combined patch (supersedes amd-bsb-dsc-fix.patch).
+    # It includes: QP tables + RC ofs[11] + VESA DisplayID DSC BPP parser + amdgpu_dm integration.
+    for patch_name in bigscreen-beyond-edid.patch 0007-vesa-dsc-bpp.patch; do
+        if [ -f "${patch_dir}/${patch_name}" ]; then
+            if patch -p1 --dry-run -N < "${patch_dir}/${patch_name}" >/dev/null 2>&1; then
+                patch -p1 -N < "${patch_dir}/${patch_name}"
+                echo "  Applied: $patch_name"
+            else
+                echo "  Skipped (already applied or conflict): $patch_name"
+            fi
+        else
+            echo "  WARNING: $patch_name not found in $patch_dir"
+        fi
+    done
+
+    # Configure
+    echo
+    echo "[4/6] Configuring kernel..."
+    if [ -f "/boot/config-$(uname -r)" ]; then
+        cp "/boot/config-$(uname -r)" .config
+        echo "  Base config from running kernel"
+    fi
+
+    # XR-specific options
+    scripts/config --enable CONFIG_DRM_AMD_DC_DSC
+    scripts/config --set-val CONFIG_HZ 1000
+    scripts/config --enable CONFIG_HZ_1000
+    scripts/config --disable CONFIG_HZ_250
+    scripts/config --enable CONFIG_USB_HIDDEV
+    scripts/config --enable CONFIG_USB_VIDEO_CLASS
+    scripts/config --set-str CONFIG_LOCALVERSION "-xr"
+    make olddefconfig
+    echo "  XR config applied"
+
+    # Build
+    echo
+    echo "[5/6] Building kernel (this takes a while)..."
+    local jobs
+    jobs=$(nproc)
+    echo "  Using $jobs parallel jobs"
+    make -j"$jobs" bzImage modules 2>&1 | tail -5
+
+    # Install
+    echo
+    echo "[6/6] Installing..."
+    make modules_install
+    make install
+    depmod -a "${kver}-xr"
+    echo "  Installed kernel ${kver}-xr"
+
+    echo
+    echo "=== Build complete ==="
+    echo "  Reboot to use the new kernel."
+    echo "  grubby --set-default /boot/vmlinuz-${kver}-xr"
+}
+
+cmd_beyond_display_init() {
+    _need_root
+    echo "=== Beyond Display Init ==="
+    echo "  Sets DSC BPP override, link rate, and sends panel init HID commands"
+    echo
+
+    # Find the AMD GPU's debugfs connector for DP-2 (Beyond)
+    local debugfs=""
+    for d in /sys/kernel/debug/dri/*/DP-2; do
+        if [ -d "$d" ]; then
+            debugfs="$d"
+            break
+        fi
+    done
+
+    if [ -z "$debugfs" ]; then
+        echo "ERROR: No DP-2 connector found in debugfs"
+        echo "  Available connectors:"
+        ls -d /sys/kernel/debug/dri/*/DP-* 2>/dev/null || echo "  (none)"
+        exit 1
+    fi
+    echo "  Connector: $debugfs"
+
+    # Step 1: DSC BPP override — Beyond requires exactly 8.0 BPP (128 in 1/16th)
+    echo
+    echo "[1/4] Setting DSC BPP to 128 (8.0 BPP)..."
+    if [ -f "$debugfs/dsc_bits_per_pixel" ]; then
+        echo "  Current: $(cat "$debugfs/dsc_bits_per_pixel")"
+        echo 0x80 > "$debugfs/dsc_bits_per_pixel"
+        echo "  Set to: $(cat "$debugfs/dsc_bits_per_pixel")"
+    else
+        echo "  WARNING: dsc_bits_per_pixel not found (kernel may not support DSC override)"
+    fi
+
+    # Step 2: Force HBR2 link rate (5.4 Gbps, 4 lanes)
+    echo
+    echo "[2/4] Setting link rate to HBR2 (4 lanes, 5.4 Gbps)..."
+    if [ -f "$debugfs/link_settings" ]; then
+        echo "4 0x14" > "$debugfs/link_settings"
+        echo "  Done"
+    else
+        echo "  WARNING: link_settings not found"
+    fi
+
+    # Step 3: Verify DTN (display pipeline state)
+    echo
+    echo "[3/4] Checking display pipeline..."
+    local dtn_dir
+    dtn_dir=$(dirname "$debugfs")
+    if [ -f "$dtn_dir/amdgpu_dm_dtn_log" ]; then
+        # Check DSC and link status
+        local dsc_line
+        dsc_line=$(grep "DSC" "$dtn_dir/amdgpu_dm_dtn_log" 2>/dev/null | head -3)
+        if [ -n "$dsc_line" ]; then
+            echo "  DSC status:"
+            echo "$dsc_line" | sed 's/^/    /'
+        fi
+        local fec_line
+        fec_line=$(grep "FEC" "$dtn_dir/amdgpu_dm_dtn_log" 2>/dev/null | head -3)
+        if [ -n "$fec_line" ]; then
+            echo "  FEC status:"
+            echo "$fec_line" | sed 's/^/    /'
+        fi
+    fi
+
+    # Step 4: HID panel init
+    echo
+    echo "[4/4] Sending HID panel init commands..."
+    local user
+    user=$(_check_user)
+
+    # The panel init script must run as the actual user (for USB access)
+    # or as root. Write an inline Python script.
+    /usr/bin/python3 - << 'INITPY'
+"""Beyond panel init: OnHidOpen handshake + poll video_state + backlight + unmute."""
+import struct, sys, time
+
+try:
+    import usb.core, usb.util
+except ImportError:
+    print("  ERROR: pyusb not installed. Run: pip3 install pyusb")
+    sys.exit(1)
+
+VID, PID, INTF = 0x35bd, 0x0101, 2
+RT_SET, RT_GET = 0x21, 0xa1
+SET_REPORT, GET_REPORT = 0x09, 0x01
+FEATURE = 0x0300
+
+STATES = {0: "DP Init", 1: "MIPI Init", 2: "Wait For Sync",
+           3: "Panel Init", 4: "Backlight Init", 5: "Stable",
+           6: "Reset", 7: "Delayed", 8: "Disabled", 9: "Invalid"}
+
+dev = usb.core.find(idVendor=VID, idProduct=PID)
+if dev is None:
+    print("  ERROR: Beyond (35bd:0101) not found on USB")
+    sys.exit(1)
+print(f"  Found: {dev.product} (bus {dev.bus} dev {dev.address})")
+
+if dev.is_kernel_driver_active(INTF):
+    dev.detach_kernel_driver(INTF)
+usb.util.claim_interface(dev, INTF)
+
+def set_feat(fid, data):
+    buf = bytes([fid]) + data
+    buf = buf + b'\x00' * (64 - len(buf))
+    dev.ctrl_transfer(RT_SET, SET_REPORT, FEATURE, INTF, buf)
+
+def get_feat(fid, length=64):
+    try:
+        return bytes(dev.ctrl_transfer(RT_GET, GET_REPORT, FEATURE, INTF, length))
+    except Exception:
+        return None
+
+# OnHidOpen handshake: FeatureID 0x04 with magic 0x2978
+print("  Sending OnHidOpen handshake (FeatureID 0x04, magic 0x2978)...")
+payload = bytearray(0x3b)
+payload[0:4] = b'\x78\x29\x38\x01'
+set_feat(0x04, bytes(payload))
+time.sleep(0.1)
+resp = get_feat(0x04)
+if resp:
+    print(f"  Response: {resp[:16].hex()}")
+
+# SetVideoConfig: enable DP training (FeatureID 0x26)
+print("  Sending SetVideoConfig (FeatureID 0x26, dp_training=1)...")
+vc = bytearray(0x3f)
+vc[2] = 1  # dp_training_enable
+set_feat(0x26, bytes(vc))
+time.sleep(0.5)
+
+# Poll video_state via FeatureID 0x15
+print("  Polling video_state (timeout 45s)...")
+start = time.time()
+last = -1
+stable = False
+while time.time() - start < 45:
+    set_feat(0x15, b'\x00' * 0x3f)
+    time.sleep(0.05)
+    r = get_feat(0x15)
+    if r and len(r) > 1:
+        st = r[1]
+        if st != last:
+            print(f"    state={st} ({STATES.get(st, '?')}) @ {time.time()-start:.1f}s")
+            last = st
+        if st == 5:
+            stable = True
+            break
+    time.sleep(0.2)
+
+if not stable:
+    print(f"  WARNING: Did not reach Stable (last: {STATES.get(last, last)})")
+    print("  Sending backlight/unmute anyway...")
+
+# SetBacklightGain (FeatureID 0x30) — 50% brightness
+print("  Setting backlight gain to 0.5...")
+set_feat(0x30, struct.pack('<f', 0.5))
+time.sleep(0.1)
+
+# SetHMDMuteState (FeatureID 0x25) — unmute
+print("  Unmuting display...")
+set_feat(0x25, b'\x00\x00\x00\x00')
+time.sleep(0.1)
+
+# Read final state
+set_feat(0x15, b'\x00' * 0x3f)
+time.sleep(0.05)
+r = get_feat(0x15)
+if r and len(r) > 1:
+    print(f"  Final video_state: {r[1]} ({STATES.get(r[1], '?')})")
+
+# Read backlight
+set_feat(0x30, b'\x00' * 4)
+time.sleep(0.05)
+r = get_feat(0x30)
+if r and len(r) >= 5:
+    bl = struct.unpack_from('<f', r, 1)[0]
+    print(f"  Backlight: {bl}")
+
+print("  Panel init complete.")
+INITPY
+    echo
+    echo "=== Display init complete ==="
+}
+
+cmd_beyond_monitor() {
+    _need_root
+    echo "=== Beyond Display Monitor ==="
+    echo "  Ctrl-C to stop"
+    echo
+
+    local debugfs=""
+    for d in /sys/kernel/debug/dri/*/DP-2; do
+        [ -d "$d" ] && debugfs="$d" && break
+    done
+    local dtn_dir
+    dtn_dir=$(dirname "$debugfs")
+
+    # Enable CRC capture
+    echo auto > "$dtn_dir/crtc-1/crc/control" 2>/dev/null || true
+
+    while true; do
+        echo "--- $(date +%H:%M:%S) ---"
+
+        # DSC state
+        local dsc_en slice_w bpp
+        dsc_en=$(awk '/^\[1\]:/{print $2; exit}' <(sed -n '/^DSC:/,/^$/p' "$dtn_dir/amdgpu_dm_dtn_log") 2>/dev/null)
+        slice_w=$(awk '/^\[1\]:/{print $3; exit}' <(sed -n '/^DSC:/,/^$/p' "$dtn_dir/amdgpu_dm_dtn_log") 2>/dev/null)
+        bpp=$(cat "$debugfs/dsc_bits_per_pixel" 2>/dev/null | tr -d '\0')
+        echo "  DSC: clock_en=$dsc_en slice_w=$slice_w bpp=$bpp"
+
+        # Link status
+        local fec_active link_ok
+        fec_active=$(awk '/^\[1/{print $4; exit}' <(sed -n '/^L_ENC: DPHY/,/^$/p' "$dtn_dir/amdgpu_dm_dtn_log") 2>/dev/null)
+        link_ok=$(awk '/^\[1/{print $5; exit}' <(sed -n '/^L_ENC: DPHY/,/^$/p' "$dtn_dir/amdgpu_dm_dtn_log") 2>/dev/null)
+        echo "  Link: fec_active=$fec_active training_complete=$link_ok"
+
+        # CRC (frame counter + hash)
+        local crc_line
+        crc_line=$(timeout 1 head -1 "$dtn_dir/crtc-1/crc/data" 2>/dev/null)
+        if [ -n "$crc_line" ]; then
+            echo "  CRC: $crc_line"
+        else
+            echo "  CRC: (no data)"
+        fi
+
+        # Monado process
+        local mpid
+        mpid=$(pgrep -o monado-service 2>/dev/null || echo "DEAD")
+        echo "  Monado: PID=$mpid"
+
+        # HID input report (one read, check type)
+        /usr/bin/python3 -c "
+import os, select, time
+try:
+    fd = os.open('/dev/hidraw3', os.O_RDONLY | os.O_NONBLOCK)
+    r, _, _ = select.select([fd], [], [], 0.3)
+    if r:
+        data = os.read(fd, 64)
+        t = data[0] if data else 0
+        if t == 0x23:
+            # IMU: bytes 1-4 = timestamp, 5-6 = accel/gyro ranges
+            ts = int.from_bytes(data[1:5], 'little')
+            print(f'  HID: type=0x23(IMU) ts={ts} len={len(data)}')
+        elif t == 0x24:
+            print(f'  HID: type=0x24(STATUS) data={data[:16].hex()}')
+        else:
+            print(f'  HID: type=0x{t:02x} data={data[:16].hex()}')
+    else:
+        print('  HID: (no report)')
+    os.close(fd)
+except Exception as e:
+    print(f'  HID: error={e}')
+" 2>/dev/null
+
+        # Underflow check
+        local uf
+        uf=$(awk '/^\[ 1\]:/{print $13; exit}' <(sed -n '/^HUBP:  format/,/^$/p' "$dtn_dir/amdgpu_dm_dtn_log") 2>/dev/null)
+        [ "$uf" != "0h" ] && [ -n "$uf" ] && echo "  !! UNDERFLOW: $uf"
+
+        echo
+        sleep 2
+    done
+}
+
+cmd_beyond_dsc_flash() {
+    _need_root
+    echo "=== Beyond DSC Flash Trigger ==="
+    echo "  Toggles DSC off/on to trigger FPGA re-init (flash canary)"
+    echo "  PUT HEADSET ON before running this!"
+    echo
+
+    local debugfs=""
+    for d in /sys/kernel/debug/dri/*/DP-2; do
+        [ -d "$d" ] && debugfs="$d" && break
+    done
+
+    if [ -z "$debugfs" ]; then
+        echo "ERROR: DP-2 debugfs not found"
+        exit 1
+    fi
+
+    echo "[1] Current DSC BPP: $(cat "$debugfs/dsc_bits_per_pixel" 2>/dev/null | tr -d '\0')"
+
+    # Force a link retrain by writing link_settings
+    # This causes the FPGA to re-detect the DP stream
+    echo "[2] Forcing link retrain (HBR2, 4 lanes)..."
+    echo "4 0x14" > "$debugfs/link_settings"
+    sleep 1
+
+    echo "[3] Post-retrain DSC BPP: $(cat "$debugfs/dsc_bits_per_pixel" 2>/dev/null | tr -d '\0')"
+
+    # Check DSC state
+    local dtn_dir
+    dtn_dir=$(dirname "$debugfs")
+    echo "[4] DSC state after retrain:"
+    sed -n '/^DSC:/,/^$/p' "$dtn_dir/amdgpu_dm_dtn_log" 2>/dev/null | head -6
+
+    echo
+    echo "Did you see a flash? If yes, the FPGA is decoding (partially)."
+    echo "If no flash, the FPGA is not detecting the DP stream change."
+}
+
+cmd_beyond_dsc_sweep() {
+    _need_root
+    echo "=== Beyond DSC BPP Sweep ==="
+    echo "  Tries different DSC BPP values to find what the FPGA accepts"
+    echo "  PUT HEADSET ON before running this!"
+    echo
+
+    local debugfs=""
+    for d in /sys/kernel/debug/dri/*/DP-2; do
+        [ -d "$d" ] && debugfs="$d" && break
+    done
+
+    if [ -z "$debugfs" ]; then
+        echo "ERROR: DP-2 debugfs not found"
+        exit 1
+    fi
+
+    # Kill and restart Monado for each BPP value
+    # BPP values to try (in 1/16th): 128=8.0, 96=6.0, 160=10.0, 112=7.0, 144=9.0
+    for bpp in 128 96 160 112 144; do
+        local bpp_real
+        bpp_real=$(echo "scale=1; $bpp / 16" | bc)
+        echo "--- Testing BPP=$bpp ($bpp_real bpp) ---"
+
+        # Kill Monado
+        pkill -f monado-service 2>/dev/null || true
+        sleep 2
+        rm -f /run/user/1000/monado_comp_ipc
+
+        # Set BPP override
+        echo "$bpp" > "$debugfs/dsc_bits_per_pixel"
+        echo "  Set override: $(cat "$debugfs/dsc_bits_per_pixel" 2>/dev/null | tr -d '\0')"
+
+        # Start Monado
+        local user
+        user=$(_check_user)
+        sudo -u "$user" bash -c "
+            export XDG_RUNTIME_DIR=/run/user/1000
+            export WAYLAND_DISPLAY=wayland-1
+            export STEAMVR_LH_ENABLE=1
+            (while true; do sleep 86400; done) | /usr/local/bin/monado-service > /tmp/monado-sweep-$bpp.log 2>&1 &
+        "
+        sleep 5
+
+        if pgrep -q monado-service 2>/dev/null; then
+            echo "  Monado started"
+            echo "  >>> Put headset on NOW — watching for 8 seconds..."
+            sleep 8
+
+            # Check CRC (are frames different?)
+            local dtn_dir
+            dtn_dir=$(dirname "$debugfs")
+            echo auto > "$dtn_dir/crtc-1/crc/control" 2>/dev/null || true
+            local crc1 crc2
+            crc1=$(timeout 1 head -1 "$dtn_dir/crtc-1/crc/data" 2>/dev/null)
+            sleep 0.5
+            crc2=$(timeout 1 head -1 "$dtn_dir/crtc-1/crc/data" 2>/dev/null)
+            echo "  CRC: $crc1"
+        else
+            echo "  Monado FAILED to start at BPP=$bpp"
+            tail -3 "/tmp/monado-sweep-$bpp.log" 2>/dev/null
+        fi
+        echo
+    done
+
+    echo "=== Sweep complete ==="
+    echo "Which BPP value produced a flash or sustained display?"
+}
+
 cmd_full_setup() {
     cmd_prereqs
     echo
@@ -993,6 +1684,12 @@ usage() {
     echo "  beyond-oobe          Full out-of-box experience (power → config → test)"
     echo "  openxr-build         Build hello_xr from OpenXR-SDK-Source"
     echo "  gpu-tools            Install Vulkan tools + GPU diagnostics (sudo)"
+    echo "  beyond-display-init  Set DSC BPP + link rate + HID panel init (sudo)"
+    echo "  beyond-monitor       Continuous display pipeline monitor (sudo)"
+    echo "  beyond-dsc-flash     Toggle DSC to trigger FPGA re-init flash (sudo)"
+    echo "  beyond-dsc-sweep     Try multiple DSC BPP values (sudo)"
+    echo "  kernel-build [ver]   Build XR kernel from source with all patches (sudo)"
+    echo "  kernel-dsc-fix       Patch amdgpu DSC QP tables for Beyond (sudo)"
     echo "  full-setup           Run prereqs + kernel-upgrade (sudo)"
     echo
     echo "Environment:"
@@ -1014,6 +1711,12 @@ case "${1:-}" in
     beyond-oobe)    shift; cmd_beyond_oobe "$@" ;;
     openxr-build)   shift; cmd_openxr_build "$@" ;;
     gpu-tools)      shift; cmd_gpu_tools "$@" ;;
+    beyond-display-init) shift; cmd_beyond_display_init "$@" ;;
+    beyond-monitor) shift; cmd_beyond_monitor "$@" ;;
+    beyond-dsc-flash) shift; cmd_beyond_dsc_flash "$@" ;;
+    beyond-dsc-sweep) shift; cmd_beyond_dsc_sweep "$@" ;;
+    kernel-build)   shift; cmd_kernel_build "$@" ;;
+    kernel-dsc-fix) shift; cmd_kernel_dsc_fix "$@" ;;
     full-setup)     shift; cmd_full_setup "$@" ;;
     -h|--help|help) usage ;;
     *)
