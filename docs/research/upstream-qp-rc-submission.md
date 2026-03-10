@@ -19,8 +19,23 @@ transcription error in the AMD display driver's rate control parameters for
 
 Without this fix, DSC at 8 BPP in 4:4:4 mode produces incorrect rate control
 parameters. Displays requiring this mode (e.g., Bigscreen Beyond VR headset)
-show rainbow static or fail to decode. The fix aligns the kernel tables with
-the VESA DSC 1.1 reference model.
+show rainbow static or fail to decode entirely. The fix aligns the kernel tables
+with the VESA DSC 1.1 reference model (Table E-5).
+
+### Code Path Analysis (2026-03-10)
+
+Source-level analysis confirms that both the `dsc_policy_max_target_bpp_limit`
+binary hack and the proper VESA DisplayID `dsc_fixed_bits_per_pixel_x16` path
+produce **identical PPS parameters** — the BPP selection method differs but the
+RC computation in `_do_calc_rc_params()` → `drm_dsc_compute_rc_parameters()` is
+the same. This means:
+
+1. The QP/RC fix is the **sole requirement** for correct DSC at BPP=8.0
+2. The VESA DisplayID parser (Bolyukin's series) is needed for **automatic BPP
+   discovery** but does not change the PPS output
+3. The original "9-bit FPGA register" hypothesis is largely ruled out — the
+   Beyond's DSC decoder (likely Analogix ANX753x ASIC) uses spec-compliant
+   register widths; the failure was always in the kernel's QP tables
 
 ## Independence from Bolyukin's Series
 

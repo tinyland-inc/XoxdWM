@@ -1,4 +1,4 @@
-# Beyond DSC Decoder: Hardware Identification & Verification Notes
+# Beyond DSC Decoder: Hardware Identification & PPS Analysis
 
 ## Current Status (2026-03-10)
 
@@ -10,21 +10,16 @@ the standalone QP/RC fix (`amd-bsb-dsc-fix.patch`), and the EDID non_desktop qui
 Nix kernel derivation is also functional at `nix/kernel/xr-kernel.nix` and exposed
 as `packages.kernel-xr` in the flake.
 
-**Next step**: install XR kernel on honey and verify the VESA DisplayID parser path.
+**Next step**: install XR kernel on honey and verify DSC at BPP=8.0 with corrected
+QP tables and RC offsets.
 
-The DisplayID path takes a DIFFERENT code path through amdgpu_dm than the
-`dsc_policy_max_target_bpp_limit` binary hack that was used for initial BPP=128
-testing. The binary hack produced BPP=128 but displays went dark. The proper patch
-uses `dsc_fixed_bits_per_pixel_x16` from the EDID VESA vendor block, which feeds into:
+### Key Finding: Code Path Analysis (2026-03-10)
 
-```
-dm_helpers_read_local_edid()
-  -> drm_update_dsc_info()
-    -> amdgpu_dm_update_connector_after_detect()
-```
+Source-level analysis of the kernel's DSC subsystem confirms that **both BPP selection
+paths produce identical PPS parameters**. The "different code path" hypothesis was wrong.
+The actual fix is the QP table and RC offset corrections in the CachyOS patch.
 
-This computation path may produce different PPS parameters than the binary hack at the
-same nominal BPP. The kernel install may resolve the question entirely.
+See [Code Path Analysis](#code-path-analysis-binary-hack-vs-displayid) below for details.
 
 ## Context
 
@@ -122,52 +117,139 @@ Both terms are well-defined but term 1 evaluates to exactly 512 -- the spec mini
 this BPP. This is NOT a coincidence; 8.0 BPP is the boundary where the RC model buffer
 math hits exactly 2^9.
 
-### 9-Bit Register Hypothesis: Weakened by Hardware Research
+### 9-Bit Register Hypothesis: Largely Ruled Out
 
-The NVIDIA Windows driver may compute different PPS because it uses its own DSC parameter
-computation, not the kernel's `drm_dsc_compute_rc_parameters()`. If NVIDIA produces a
-working PPS at BPP=8.0, the difference could be in the computation rather than a register
-width limitation.
+**If the DSC decoder is an Analogix ANX753x** (most likely): The 9-bit register theory
+is very unlikely. Analogix chips are production silicon designed to the DSC 1.2a spec —
+they use spec-compliant register widths. The failure at BPP=8.0 is almost certainly a
+PPS computation bug in the kernel driver — specifically wrong QP tables and RC offsets.
 
-**If the DSC decoder is an Analogix ANX753x**: The 9-bit register theory is unlikely.
-Analogix chips are production silicon designed to the DSC spec — they would use
-spec-compliant register widths. The failure at BPP=8.0 would more likely be a PPS
-computation issue in the kernel driver.
+**If the DSC decoder is an FPGA**: The 9-bit register theory remains technically
+plausible but is the less likely explanation given code path analysis (see below).
 
-**If the DSC decoder is an FPGA**: The 9-bit register theory remains plausible, as
-custom FPGA implementations could have non-standard register widths.
+### ~~Alternative Hypothesis: Code Path Difference~~ — DISPROVEN
 
-The "different code path" theory (binary hack vs. proper DisplayID path) is currently
-stronger than the 9-bit register theory because:
-- The binary hack forces BPP via bandwidth negotiation, bypassing EDID-informed defaults
-- The proper path may set additional PPS fields (e.g., native_420, simple_422) differently
-- RC parameter tables may differ between the two paths
+Source-level analysis of `dc_dsc.c`, `rc_calc_fpu.c`, and `drm_dsc_helper.c` confirms
+that both the binary hack and the VESA DisplayID path produce **identical PPS bytes**.
+The paths diverge only in HOW `bits_per_pixel = 128` is selected, not in WHAT RC
+parameters result. See [Code Path Analysis](#code-path-analysis-binary-hack-vs-displayid).
 
-### Alternative Hypothesis: Code Path Difference
+### Root Cause: Wrong QP Tables + RC Offset at BPP=8.0
 
-The `dsc_policy_max_target_bpp_limit` binary hack forces BPP=128 via the bandwidth
-negotiation path. The proper upstream fix uses `dsc_fixed_bits_per_pixel_x16` from the
-EDID VESA vendor block, which may take a different computation path through the AMD
-display code. These two paths might produce different PPS parameters even at the same
-nominal BPP.
+The stock kernel's `qp_table_444_8bpc_max` and `qp_table_444_8bpc_min` have incorrect
+values at BPP=8.0, and `get_ofs_set()` computes wrong RC offsets. This produces a PPS
+whose rate control parameters cause the DSC decoder to fail — regardless of whether the
+decoder is an FPGA or Analogix ASIC. The QP/RC fix in `amd-bsb-dsc-fix.patch` (and
+equivalently in `0007-vesa-dsc-bpp.patch`) corrects these values.
+
+## Code Path Analysis: Binary Hack vs DisplayID
+
+### How BPP=128 Is Selected
+
+**Path A: Binary hack (`dsc_policy_max_target_bpp_limit = 8`)**
+
+The module parameter clamps `policy->max_target_bpp` to 8. In `decide_dsc_bandwidth_range()`
+(`dc/dsc/dc_dsc.c`), since `timing->dsc_fixed_bits_per_pixel_x16 == 0` (no VESA parser),
+the else branch fires — computing bandwidth range from policy limits:
+
+```c
+range->max_target_bpp_x16 = max_bpp_x16;   // 8 * 16 = 128
+range->min_target_bpp_x16 = min_bpp_x16;   // 8 * 16 = 128
+```
+
+**Path B: VESA DisplayID (`dsc_fixed_bits_per_pixel_x16 = 128`)**
+
+The CachyOS patch adds `drm_parse_vesa_specific_block()` which reads `dsc_bpp_int` and
+`dsc_bpp_fract` from the EDID VESA vendor block. For Beyond: `BPP_int=8`, `BPP_frac=0`
+→ `dp_dsc_bpp_x16 = 128`. This propagates to `stream->timing.dsc_fixed_bits_per_pixel_x16`.
+
+In `decide_dsc_bandwidth_range()`, the FIRST branch fires:
+
+```c
+uint32_t preferred_bpp_x16 = timing->dsc_fixed_bits_per_pixel_x16;  // 128
+if (preferred_bpp_x16) {
+    range->max_target_bpp_x16 = preferred_bpp_x16;  // 128
+    range->min_target_bpp_x16 = preferred_bpp_x16;  // 128
+}
+```
+
+### Why They Produce Identical PPS
+
+Both paths ultimately call `_do_calc_rc_params()` → `drm_dsc_compute_rc_parameters()`
+with the same `drm_dsc_config.bits_per_pixel = 128`. The RC parameter computation depends
+only on `bits_per_pixel`, `bits_per_component`, `slice_width`, and the QP/offset tables.
+None of these change between the two paths.
+
+| PPS Field | Path A | Path B | Difference |
+|-----------|--------|--------|------------|
+| `bits_per_pixel` (x16) | 128 | 128 | None |
+| `initial_xmit_delay` | 512 | 512 | None |
+| `initial_offset` | 6144 | 6144 | None |
+| `initial_dec_delay` | (same) | (same) | None |
+| `initial_scale_value` | 32 | 32 | None |
+| `rc_range_params[0..14]` | (same) | (same) | None |
+
+### What Actually Changes: QP Tables + RC Offset
+
+The CachyOS patch modifies three things in `dc/dml/dsc/`:
+
+**1. `qp_table_444_8bpc_max` at BPP=8** (`qp_tables.h:66`):
+```
+Stock:   { 4, 4, 5, 6, 7, 7, 7, 8, 9, 10, 10, 11, 11, 12, 13 }
+Patched: { 4, 4, 5, 6, 7, 7, 7, 8, 9, 10, 11, 12, 13, 13, 15 }
+                                            ^^  ^^  ^^  ^^  ^^
+```
+Ranges 10-14 are raised, allowing more aggressive quantization at high buffer fullness.
+
+**2. `qp_table_444_8bpc_min` at BPP=8** (`qp_tables.h:74`):
+```
+Stock:   { 0, 0, 1, 1, 3, 3, 3, 3, 3, 4, 5, 5, 5, 8, 12 }
+Patched: { 0, 0, 1, 1, 3, 3, 3, 3, 3, 3, 5, 5, 5, 7, 13 }
+                                       ^^           ^^  ^^
+```
+Range 9 lowered (was 4→3), range 13 lowered (8→7), range 14 raised (12→13).
+
+**3. RC offset[11] in `get_ofs_set()`** (`rc_calc_fpu.c:126`):
+```c
+// Stock:  (bpp >= 8) ? (-10)
+// Patched: (bpp >= 8) ? (-12)
+```
+More aggressive negative offset at range 11, increasing rate control pressure.
+
+### Implications
+
+The display going dark at BPP=8.0 with the binary hack was NOT because the binary hack
+took a different code path — it was because the **stock kernel's QP tables and RC offsets
+are wrong at BPP=8.0 for 8bpc 4:4:4/RGB**. The DSC decoder (Analogix or FPGA) rejects
+the resulting PPS because the rate control parameters produce invalid decode states.
+
+The CachyOS patch fixes both:
+1. **QP/RC values** — corrects the PPS so the decoder accepts it
+2. **VESA DisplayID parser** — lets the kernel discover BPP=128 from the EDID instead
+   of requiring a binary hack
+
+Both are needed: the parser without QP/RC fix would still produce a bad PPS, and the
+QP/RC fix without the parser requires manual intervention to set BPP=128.
 
 ## Next Verification Steps
 
-**Step A**: Install linux-xr kernel (v6.19.5-xr1) on honey. Check if BPP=128 works
-through the proper `dsc_fixed_bits_per_pixel_x16` code path. XR kernel RPMs are built;
-install via `just beyond-kernel-install honey v6.19.5-xr1`. Highest-priority action.
+**Step A**: Install linux-xr kernel (v6.19.5-xr1) on honey. The patched kernel has
+corrected QP tables, RC offset[11], and the VESA DisplayID parser. Expected outcome:
+BPP=8.0 works, display shows correct image instead of going dark.
+Install via `just beyond-kernel-install honey v6.19.5-xr1`.
 
-**Step B**: If still fails, capture PPS from
-`/sys/kernel/debug/dri/1/DP-2/dsc_pic_parameter_set` and compare against the PPS
-produced by the binary hack. Diff every field.
+**Step B**: Capture PPS from `/sys/kernel/debug/dri/1/DP-2/dsc_pic_parameter_set`
+on the patched kernel. Compare `rc_range_params[10..14]` against stock kernel values
+to confirm the QP table fix is active. Key fields to verify:
+- `rc_range_params[11].range_bpg_offset` should be -12 (was -10)
+- `rc_range_params[10..14].range_max_qp` should match patched table
 
-**Step C**: If PPS differs between the two paths, the issue is the computation path,
-not the FPGA. Fix the PPS computation (likely RC parameters or initial_offset) and
-retest.
+**Step C**: If still fails with patched kernel, capture NVIDIA PPS (Windows) for
+comparison. The NVIDIA driver may use different `initial_offset` or `rc_model_size`
+values that we haven't accounted for.
 
-**Step D**: If PPS is identical, the FPGA 9-bit register theory gains significant
-strength. Then proceed to NVIDIA PPS capture to determine what value NVIDIA uses for
-`initial_xmit_delay` at BPP=8.0.
+**Step D**: If NVIDIA PPS reveals additional differences beyond QP/RC, create a
+second patch for those fields and iterate.
 
 ## Verification Approaches (Background)
 
@@ -292,13 +374,14 @@ against the FPGA's acceptance criteria. CI pipeline:
 
 ## Priority Order
 
-1. **linux-xr kernel install + DisplayID path test** -- imminent, may resolve everything
-2. **PPS diff: DisplayID path vs. binary hack** -- if Step A fails
-3. **NVIDIA PPS capture** -- if PPS is identical between paths (9-bit theory)
-4. **Systematic PPS boundary testing** -- field-by-field isolation
-5. **Hardware identification** -- PCB photos to confirm DSC decoder chip
-6. **IceStorm bitstream extraction** -- only if decoder is confirmed FPGA
-7. **SymbiYosys formal verification** -- requires netlist from step 6
+1. **linux-xr kernel install + QP/RC validation** — imminent; XR kernel has corrected
+   QP tables + RC offsets + VESA DisplayID parser. Expected to resolve BPP=8.0 failure.
+2. **PPS capture on honey** — dump PPS from debugfs, compare stock vs patched kernel
+3. **NVIDIA PPS capture** — reference known-good PPS from Windows driver
+4. **Hardware identification** — PCB photos to confirm DSC decoder chip (Analogix vs FPGA)
+5. **Systematic PPS boundary testing** — field-by-field isolation (if QP/RC fix fails)
+6. ~~IceStorm bitstream extraction~~ — deprioritized (FPGA theory largely ruled out)
+7. ~~SymbiYosys formal verification~~ — deprioritized (depends on step 6)
 
 ## References
 
