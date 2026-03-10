@@ -1,0 +1,163 @@
+name: Native Dependencies (wlroots + sway)
+
+on:
+  push:
+    branches: [main, dev, 'feature/*']
+    paths:
+      - 'patches/wlroots-*'
+      - 'packaging/rpm/wlroots-*'
+      - 'packaging/rpm/sway-*'
+      - 'packaging/sway/**'
+      - 'nix/packages/wlroots-*'
+      - 'nix/packages/sway-*'
+  pull_request:
+    paths:
+      - 'patches/wlroots-*'
+      - 'packaging/rpm/wlroots-*'
+      - 'packaging/rpm/sway-*'
+      - 'packaging/sway/**'
+      - 'nix/packages/wlroots-*'
+      - 'nix/packages/sway-*'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  WLROOTS_VERSION: '0.18.2'
+  SWAY_VERSION: '1.10'
+
+jobs:
+  # ── Nix build (self-hosted) ──────────────────────────────
+  nix-build:
+    name: Nix Build (wlroots + sway)
+    runs-on: ${{ vars.USE_SELFHOSTED == 'true' && 'tinyland-nix' || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v30
+      - uses: ryanccn/attic-action@v0
+        if: env.ATTIC_SERVER != ''
+        with:
+          endpoint: ${{ env.ATTIC_SERVER }}
+          cache: ${{ env.ATTIC_CACHE }}
+          token: ${{ secrets.ATTIC_TOKEN }}
+
+      - name: Build wlroots-beyond
+        run: nix build .#wlroots-beyond --out-link result-wlroots || echo "nix package not yet defined"
+
+      - name: Build sway-beyond
+        run: nix build .#sway-beyond --out-link result-sway || echo "nix package not yet defined"
+
+      - name: Push to Attic cache
+        if: env.ATTIC_SERVER != '' && github.event_name == 'push'
+        run: |
+          for link in result-wlroots result-sway; do
+            if [ -L "$link" ]; then
+              echo "Pushing $link to Attic..."
+              attic push "$ATTIC_CACHE" "$link" || echo "Warning: failed to push $link"
+            fi
+          done
+
+  # ── RPM build (Ubuntu container with cross-build) ────────
+  rpm-build:
+    name: RPM Build (wlroots + sway)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            rpm ccache \
+            meson ninja-build gcc pkg-config \
+            libwayland-dev wayland-protocols \
+            libdrm-dev libegl-dev libgbm-dev libgl-dev \
+            libinput-dev libxkbcommon-dev \
+            libpixman-1-dev libseat-dev \
+            libxcb1-dev libxcb-composite0-dev libxcb-icccm4-dev \
+            libxcb-render0-dev libxcb-res0-dev libxcb-xinput-dev \
+            xwayland hwdata \
+            libjson-c-dev libpango1.0-dev libcairo2-dev \
+            libgdk-pixbuf-2.0-dev libpcre2-dev libevdev-dev \
+            scdoc
+
+      - name: Setup ccache
+        run: |
+          echo "/usr/lib/ccache" >> "$GITHUB_PATH"
+          mkdir -p ~/.ccache
+          echo "max_size = 500M" > ~/.ccache/ccache.conf
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-native-deps-${{ github.sha }}
+          restore-keys: ccache-native-deps-
+
+      - name: Setup rpmbuild tree
+        run: |
+          mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+
+      # ── wlroots ──
+      - name: Download wlroots source
+        run: |
+          curl -fsSL -o ~/rpmbuild/SOURCES/wlroots-${{ env.WLROOTS_VERSION }}.tar.gz \
+            "https://gitlab.freedesktop.org/wlroots/wlroots/-/releases/${{ env.WLROOTS_VERSION }}/downloads/wlroots-${{ env.WLROOTS_VERSION }}.tar.gz"
+
+      - name: Copy wlroots patch
+        run: |
+          cp patches/wlroots-bigscreen-non-desktop.patch ~/rpmbuild/SOURCES/
+
+      - name: Build wlroots RPM
+        run: |
+          rpmbuild -bb --nodeps \
+            --define "wlroots_version ${{ env.WLROOTS_VERSION }}" \
+            --define "_topdir $HOME/rpmbuild" \
+            packaging/rpm/wlroots-beyond.spec
+        env:
+          CC: ccache gcc
+
+      # ── sway ──
+      - name: Download sway source
+        run: |
+          curl -fsSL -o ~/rpmbuild/SOURCES/sway-${{ env.SWAY_VERSION }}.tar.gz \
+            "https://github.com/swaywm/sway/releases/download/${{ env.SWAY_VERSION }}/sway-${{ env.SWAY_VERSION }}.tar.gz"
+
+      - name: Copy sway config
+        run: |
+          cp packaging/sway/config ~/rpmbuild/SOURCES/exwm-vr-sway.conf
+
+      - name: Install wlroots-beyond locally for sway build
+        run: |
+          # Install the just-built wlroots into a prefix sway can find
+          WLROOTS_RPM=$(find ~/rpmbuild/RPMS -name 'wlroots-beyond-[0-9]*.rpm' | head -1)
+          WLROOTS_DEVEL_RPM=$(find ~/rpmbuild/RPMS -name 'wlroots-beyond-devel-*.rpm' | head -1)
+          if [ -n "$WLROOTS_RPM" ] && [ -n "$WLROOTS_DEVEL_RPM" ]; then
+            sudo rpm -ivh --nodeps --force "$WLROOTS_RPM" "$WLROOTS_DEVEL_RPM"
+          else
+            echo "Warning: wlroots RPMs not found, sway build may fail"
+          fi
+
+      - name: Build sway RPM
+        run: |
+          rpmbuild -bb --nodeps \
+            --define "sway_version ${{ env.SWAY_VERSION }}" \
+            --define "_topdir $HOME/rpmbuild" \
+            packaging/rpm/sway-beyond.spec
+        env:
+          CC: ccache gcc
+
+      - name: ccache stats
+        if: always()
+        run: ccache -s
+
+      - name: Upload RPM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-deps-rpms
+          path: ~/rpmbuild/RPMS/**/*.rpm
+          retention-days: 7

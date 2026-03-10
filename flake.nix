@@ -37,6 +37,9 @@
     let
       version = "0.5.0";
 
+      # XR kernel module — patches + structured config for Bigscreen Beyond 2e
+      xrKernelLib = import ./nix/kernel/xr-kernel.nix;
+
       # Shared helper: build the Wayland/DRM library list for any pkgs set
       # (used by both the per-system block and the cross-compilation blocks)
       mkWaylandLibs = pkgs: with pkgs; [
@@ -69,30 +72,24 @@
 
         # Kernel overlay: XR kernel patches for Bigscreen Beyond 2e + AMD DSC
         #
-        # Patches applied:
-        #   1. bigscreen-beyond-edid.patch — EDID non-desktop quirk (BIG/0x1234)
-        #   2. 0007-vesa-dsc-bpp.patch — CachyOS combined: DSC QP tables + RC ofs[11]
-        #      + VESA DisplayID DSC BPP parser + amdgpu_dm dsc_fixed_bits_per_pixel_x16
+        # Uses nix/kernel/xr-kernel.nix for patches + structured config.
         #
         # Usage in NixOS config:
         #   nixpkgs.overlays = [ ewwm.overlays.kernel-beyond ];
         #   boot.kernelPackages = pkgs.linuxPackages_beyond;
-        overlays.kernel-beyond = final: prev: {
-          linuxPackages_beyond = prev.linuxPackages_latest.extend (lpSelf: lpPrev: {
-            kernel = lpPrev.kernel.override {
-              kernelPatches = (lpPrev.kernel.kernelPatches or []) ++ [
-                {
-                  name = "bigscreen-beyond-non-desktop";
-                  patch = ./patches/bigscreen-beyond-edid.patch;
-                }
-                {
-                  name = "vesa-dsc-bpp-cachyos";
-                  patch = ./patches/0007-vesa-dsc-bpp.patch;
-                }
-              ];
+        overlays.kernel-beyond = final: prev:
+          let
+            kLib = xrKernelLib {
+              inherit (prev) lib linuxKernel fetchpatch fetchurl;
+              pkgs = prev;
             };
-          });
-        };
+          in {
+            linuxPackages_beyond = prev.linuxPackages_latest.extend (lpSelf: lpPrev: {
+              kernel = kLib.mkXrKernel {
+                baseKernel = lpPrev.kernel;
+              };
+            });
+          };
       };
 
       # Per-system outputs
@@ -253,7 +250,42 @@
             cp ${./lisp/vr}/*.el $out/share/emacs/site-lisp/ewwm/vr/ 2>/dev/null || true
             cp ${./lisp/ext}/*.el $out/share/emacs/site-lisp/ewwm/ext/ 2>/dev/null || true
           '';
-        } // (pkgs.lib.optionalAttrs (system == "x86_64-linux") {
+        } // (pkgs.lib.optionalAttrs (pkgs.stdenv.isLinux) (
+          let
+            kLib = xrKernelLib {
+              inherit (pkgs) lib linuxKernel fetchpatch fetchurl;
+              inherit pkgs;
+            };
+
+            # Patched wlroots 0.18 — Bigscreen Beyond non_desktop detection
+            wlroots-beyond = import ./nix/packages/wlroots-beyond.nix { inherit pkgs; };
+
+            # Sway 1.10 linked against patched wlroots
+            sway-beyond = import ./nix/packages/sway-beyond.nix { inherit pkgs wlroots-beyond; };
+
+            # Monado OpenXR runtime with Beyond build flags
+            monado-beyond = import ./nix/packages/monado-beyond.nix {
+              inherit pkgs nixpkgs-xr system;
+            };
+          in {
+            # XR-patched kernel for NixOS — build and cache via Attic:
+            #   nix build .#kernel-xr
+            #   attic push xr-cache result/
+            # Subsequent builds with the xr-cache substituter get binary substitution.
+            packages.kernel-xr = kLib.mkXrKernel {
+              baseKernel = pkgs.linuxPackages_latest.kernel;
+            };
+
+            # Patched wlroots + sway for Bigscreen Beyond VR — build and cache:
+            #   nix build .#wlroots-beyond
+            #   nix build .#sway-beyond
+            #   attic push xr-cache result/
+            #   nix copy --to ssh://honey result/
+            packages.wlroots-beyond = wlroots-beyond;
+            packages.sway-beyond = sway-beyond;
+            packages.monado-beyond = monado-beyond;
+          }
+        )) // (pkgs.lib.optionalAttrs (system == "x86_64-linux") {
           # NixOS VM integration tests (require KVM)
           checks.boot-test = import ./nix/tests/boot-test.nix {
             inherit pkgs self;

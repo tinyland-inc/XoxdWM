@@ -37,15 +37,20 @@ jobs:
         run: nix flake check --no-build
 
       - name: Build compositor
-        run: nix build .#compositor
+        run: nix build .#compositor --out-link result-compositor
 
       - name: Build headless compositor
-        run: nix build .#compositor-headless
+        run: nix build .#compositor-headless --out-link result-headless
 
       - name: Build devShell
-        run: nix build .#devShells.x86_64-linux.default
+        run: nix build .#devShells.x86_64-linux.default --out-link result-devshell
 
       - name: Push to Attic cache
         if: env.ATTIC_SERVER != '' && github.event_name == 'push'
         run: |
-          attic push "$ATTIC_CACHE" result result-1 result-2 2>/dev/null || true
+          for link in result result-compositor result-headless result-devshell result-elisp; do
+            if [ -L "$link" ]; then
+              echo "Pushing $link to Attic..."
+              attic push "$ATTIC_CACHE" "$link" || echo "Warning: failed to push $link"
+            fi
+          done

@@ -37,6 +37,7 @@ use super::capture_visibility::CaptureVisibilityManager;
 use super::transient_3d::TransientChainManager;
 use super::virtual_keyboard::VirtualKeyboardState;
 use super::vr_interaction::VrInteraction;
+use super::vr_renderer::VrRenderer;
 
 /// Reference space type selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,6 +156,9 @@ pub struct VrState {
     pub radial_menu: RadialMenu,
     pub capture_visibility: CaptureVisibilityManager,
 
+    // VR renderer (lazy-init when GL context is available)
+    renderer: Option<VrRenderer>,
+
     // OpenXR objects (Option because they're created incrementally)
     entry: Option<xr::Entry>,
     instance: Option<xr::Instance>,
@@ -207,6 +211,7 @@ impl VrState {
             overlay_manager: OverlayManager::new(),
             radial_menu: RadialMenu::new(),
             capture_visibility: CaptureVisibilityManager::new(),
+            renderer: None,
             entry: None,
             instance: None,
             system_id: None,
@@ -507,6 +512,48 @@ impl VrState {
         &self.view_config_views
     }
 
+    /// Returns a mutable reference to the VR renderer, if initialized.
+    pub fn renderer_mut(&mut self) -> Option<&mut VrRenderer> {
+        self.renderer.as_mut()
+    }
+
+    /// Set the VR renderer (call once GL context is available).
+    pub fn set_renderer(&mut self, renderer: VrRenderer) {
+        self.renderer = Some(renderer);
+    }
+
+    /// Render the VR scene into swapchain images.
+    ///
+    /// Destructures `self` to borrow `scene`, `swapchains`,
+    /// `swapchain_images`, and `renderer` simultaneously, avoiding
+    /// aliased `&mut self` borrows.
+    pub fn render_vr_frame(
+        &mut self,
+        views: &[xr::View],
+        view_configs: &[xr::ViewConfigurationView],
+    ) {
+        if let Some(renderer) = self.renderer.as_mut() {
+            let swapchain_images: Vec<Vec<u32>> =
+                self.swapchain_images.clone();
+            let results = renderer.render_frame_to_swapchains(
+                &self.scene,
+                &mut self.swapchains,
+                &swapchain_images,
+                views,
+                view_configs,
+            );
+            let _ = results; // TODO: use for projection layer construction
+        } else {
+            // Fallback: acquire/release without rendering (black frames)
+            for swapchain in self.swapchains.iter_mut() {
+                if let Ok(_image_idx) = swapchain.acquire_image() {
+                    let _ = swapchain.wait_image(xr::Duration::INFINITE);
+                    swapchain.release_image().ok();
+                }
+            }
+        }
+    }
+
     /// Handle a session state transition.
     pub fn handle_state_change(&mut self, new_state: VrSessionState) {
         let old = self.session_state;
@@ -591,6 +638,10 @@ impl VrState {
 
     /// Clean up session-related resources.
     fn destroy_session(&mut self) {
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.destroy_gl();
+        }
+        self.renderer = None;
         self.swapchains.clear();
         self.swapchain_images.clear();
         self.reference_space = None;

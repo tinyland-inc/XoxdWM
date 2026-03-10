@@ -125,6 +125,9 @@ impl VrState {
     /// Set the active reference space. No-op when VR is disabled.
     pub fn set_reference_space(&mut self, _space_type: ReferenceSpaceType) {}
 
+    /// Render VR frame. No-op when VR is disabled.
+    pub fn render_vr_frame(&mut self, _views: &[()], _view_configs: &[()]) {}
+
     /// Shut down VR. No-op when VR is disabled.
     pub fn shutdown(&mut self) {}
 }

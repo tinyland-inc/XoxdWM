@@ -40,6 +40,9 @@ jobs:
           cache: ${{ env.ATTIC_CACHE }}
           token: ${{ secrets.ATTIC_TOKEN }}
 
+      - name: Setup sccache
+        uses: ./.github/actions/setup-sccache
+
       - name: Build compositor (full + VR)
         run: nix build .#packages.x86_64-linux.compositor
 
@@ -49,6 +52,11 @@ jobs:
             cd compositor
             cargo test --features full-backend,vr
           "
+
+      - name: sccache stats
+        if: always()
+        shell: bash
+        run: sccache --show-stats
 
   build-headless:
     name: Build x86_64 (headless)
@@ -65,12 +73,20 @@ jobs:
           cache: ${{ env.ATTIC_CACHE }}
           token: ${{ secrets.ATTIC_TOKEN }}
 
+      - name: Setup sccache
+        uses: ./.github/actions/setup-sccache
+
       - name: Build headless compositor
         run: nix build .#packages.x86_64-linux.compositor-headless
 
       - name: Verify headless binary starts
         run: |
           result/bin/ewwm-compositor --backend headless --headless-exit-after 5 || true
+
+      - name: sccache stats
+        if: always()
+        shell: bash
+        run: sccache --show-stats
 
   ert-tests:
     name: ERT Tests

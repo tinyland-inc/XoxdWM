@@ -49,23 +49,25 @@ jobs:
           retention-days: 1
 
   package-rpm:
-    name: Package RPM
+    name: Package RPM (rpmbuild)
     needs: build-binary
     runs-on: ubuntu-latest
     container: rockylinux/rockylinux:10
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install FPM dependencies
+      - name: Install rpmbuild dependencies
         run: |
-          dnf install -y ruby ruby-devel gcc make rpm-build
-          gem install fpm
+          dnf install -y rpm-build rpmdevtools gcc make \
+            rust cargo pkgconfig \
+            wayland-devel mesa-libEGL-devel mesa-libgbm-devel \
+            libinput-devel libxkbcommon-devel libdrm-devel \
+            libseat-devel libxcb-devel xcb-util-wm-devel \
+            systemd-devel selinux-policy-devel checkpolicy policycoreutils \
+            emacs tar gzip
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: compositor-binaries
-          path: dist/
+      - uses: ./.github/actions/setup-sccache
 
       - name: Set version
         id: version
@@ -76,32 +78,66 @@ jobs:
             echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Generate vendored cargo tarball
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          cd compositor && cargo vendor ../vendor
+          cd ..
+          tar czf exwm-vr-${VERSION}-vendor.tar.gz vendor
+
+      - name: Create source tarball
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # Create a source tarball matching the spec's %autosetup expectation
+          tar czf exwm-vr-${VERSION}.tar.gz \
+            --transform "s,^\.,XoxdWM-${VERSION}," \
+            --exclude='.git' --exclude='vendor' \
+            --exclude="exwm-vr-${VERSION}-vendor.tar.gz" \
+            --exclude="exwm-vr-${VERSION}.tar.gz" \
+            .
+
+      - name: Set up rpmbuild tree
+        run: |
+          rpmdev-setuptree
+          VERSION="${{ steps.version.outputs.version }}"
+          cp exwm-vr-${VERSION}.tar.gz ~/rpmbuild/SOURCES/exwm-vr-${VERSION}.tar.gz
+          cp exwm-vr-${VERSION}-vendor.tar.gz ~/rpmbuild/SOURCES/exwm-vr-${VERSION}-vendor.tar.gz
+          # Copy SELinux policy sources
+          cp packaging/selinux/exwm_vr.te ~/rpmbuild/SOURCES/
+          cp packaging/selinux/exwm_vr.if ~/rpmbuild/SOURCES/
+          cp packaging/selinux/exwm_vr.fc ~/rpmbuild/SOURCES/
+          # Copy systemd units
+          cp packaging/systemd/exwm-vr-compositor.service ~/rpmbuild/SOURCES/
+          cp packaging/systemd/exwm-vr-monado.service ~/rpmbuild/SOURCES/
+          cp packaging/systemd/exwm-vr-emacs.service ~/rpmbuild/SOURCES/
+          cp packaging/systemd/exwm-vr-brainflow.service ~/rpmbuild/SOURCES/
+          cp packaging/systemd/exwm-vr.target ~/rpmbuild/SOURCES/
+          # Copy udev rules
+          cp packaging/udev/99-exwm-vr.rules ~/rpmbuild/SOURCES/
+          # Copy desktop session files
+          cp packaging/desktop/exwm-vr.desktop ~/rpmbuild/SOURCES/
+          cp packaging/desktop/exwm-vr-session ~/rpmbuild/SOURCES/ 2>/dev/null || true
+          cp packaging/desktop/exwm-vr-portals.conf ~/rpmbuild/SOURCES/ 2>/dev/null || true
+
       - name: Build RPM
         run: |
-          chmod +x dist/result/bin/ewwm-compositor
-          fpm -s dir -t rpm \
-            -n ewwm-compositor \
-            -v "${{ steps.version.outputs.version }}" \
-            --license "GPL-3.0-or-later" \
-            --description "EXWM-VR Wayland compositor" \
-            --url "https://github.com/Jesssullivan/XoxdWM" \
-            --architecture x86_64 \
-            --depends wayland \
-            --depends mesa-libEGL \
-            --depends libinput \
-            --depends libxkbcommon \
-            dist/result/bin/ewwm-compositor=/usr/bin/ewwm-compositor \
-            packaging/systemd/=/usr/lib/systemd/user/ \
-            packaging/desktop/exwm-vr.desktop=/usr/share/wayland-sessions/exwm-vr.desktop \
-            packaging/udev/99-exwm-vr.rules=/usr/lib/udev/rules.d/99-exwm-vr.rules \
-            lisp/core/=/usr/share/emacs/site-lisp/exwm/ \
-            lisp/vr/=/usr/share/emacs/site-lisp/exwm-vr/
+          VERSION="${{ steps.version.outputs.version }}"
+          rpmbuild -bb --nodeps \
+            --define "version ${VERSION}" \
+            --define "_version ${VERSION}" \
+            packaging/rpm/exwm-vr.spec
 
-      - name: Upload RPM
+      - name: Collect RPMs
+        run: |
+          mkdir -p rpms/
+          find ~/rpmbuild/RPMS -name '*.rpm' -exec cp {} rpms/ \;
+          ls -la rpms/
+
+      - name: Upload RPMs
         uses: actions/upload-artifact@v4
         with:
           name: rpm-package
-          path: '*.rpm'
+          path: 'rpms/*.rpm'
 
   package-deb:
     name: Package DEB

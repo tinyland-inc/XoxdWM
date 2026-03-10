@@ -1,5 +1,25 @@
 # ICE40 DSC Decoder: Formal Verification Notes
 
+## Current Status
+
+The linux-xr kernel build is in progress (CI RPM: CachyOS combined patch + RT). Once
+installed on honey, the VESA DisplayID parser path will be the first thing tested.
+
+This is significant because the DisplayID path takes a DIFFERENT code path through
+amdgpu_dm than the `dsc_policy_max_target_bpp_limit` binary hack that was used for
+initial BPP=128 testing. The binary hack produced BPP=128 but displays went dark.
+The proper patch uses `dsc_fixed_bits_per_pixel_x16` from the EDID VESA vendor block,
+which feeds into:
+
+```
+dm_helpers_read_local_edid()
+  -> drm_update_dsc_info()
+    -> amdgpu_dm_update_connector_after_detect()
+```
+
+This computation path may produce different PPS parameters than the binary hack at the
+same nominal BPP. The kernel install may resolve the question entirely.
+
 ## Context
 
 The Bigscreen Beyond 2e uses a Lattice ICE40 HX8K FPGA as its DSC (Display Stream
@@ -28,8 +48,40 @@ At BPP=8.0, the DSC spec computes `initial_xmit_delay = 512`. This value require
 10 bits to represent. All working BPP values produce `initial_xmit_delay < 512` (9 bits).
 
 **Hypothesis**: The ICE40 FPGA uses a 9-bit register for `initial_xmit_delay`, causing
-512 → 0 overflow. This would make the decoder start transmitting immediately (delay=0)
+512 -> 0 overflow. This would make the decoder start transmitting immediately (delay=0)
 instead of buffering 512 pixels, causing catastrophic decode failure.
+
+### DSC 1.2a Spec Formula for initial_xmit_delay
+
+The spec defines:
+
+```
+initial_xmit_delay = max(
+  ceil((rc_model_size - initial_offset) / bits_per_pixel),
+  slice_width * bits_per_component / (4 * bits_per_pixel)
+)
+```
+
+At BPP=8.0 (rc_model_size=8192, initial_offset=4096, slice_width=960, bpc=8):
+- Term 1: ceil((8192 - 4096) / 8.0) = ceil(512.0) = 512
+- Term 2: 960 * 8 / (4 * 8.0) = 7680 / 32 = 240
+
+Both terms are well-defined but term 1 evaluates to exactly 512 -- the spec minimum at
+this BPP. This is NOT a coincidence; 8.0 BPP is the boundary where the RC model buffer
+math hits exactly 2^9.
+
+### 9-Bit Register Hypothesis: Still Plausible but Weakened
+
+The NVIDIA Windows driver may compute different PPS because it uses its own DSC parameter
+computation, not the kernel's `drm_dsc_compute_rc_parameters()`. If NVIDIA produces a
+working PPS at BPP=8.0, the difference could be in the computation rather than a register
+width limitation.
+
+The "different code path" theory (binary hack vs. proper DisplayID path) is currently
+stronger than the 9-bit register theory because:
+- The binary hack forces BPP via bandwidth negotiation, bypassing EDID-informed defaults
+- The proper path may set additional PPS fields (e.g., native_420, simple_422) differently
+- RC parameter tables may differ between the two paths
 
 ### Alternative Hypothesis: Code Path Difference
 
@@ -39,7 +91,25 @@ EDID VESA vendor block, which may take a different computation path through the 
 display code. These two paths might produce different PPS parameters even at the same
 nominal BPP.
 
-## Verification Approaches
+## Next Verification Steps
+
+**Step A**: Install linux-xr kernel with VESA DisplayID patch on honey. Check if
+BPP=128 works through the proper `dsc_fixed_bits_per_pixel_x16` code path. This is
+imminent and is the highest-priority action.
+
+**Step B**: If still fails, capture PPS from
+`/sys/kernel/debug/dri/1/DP-2/dsc_pic_parameter_set` and compare against the PPS
+produced by the binary hack. Diff every field.
+
+**Step C**: If PPS differs between the two paths, the issue is the computation path,
+not the FPGA. Fix the PPS computation (likely RC parameters or initial_offset) and
+retest.
+
+**Step D**: If PPS is identical, the FPGA 9-bit register theory gains significant
+strength. Then proceed to NVIDIA PPS capture to determine what value NVIDIA uses for
+`initial_xmit_delay` at BPP=8.0.
+
+## Verification Approaches (Background)
 
 ### 1. Bitstream Extraction (IceStorm)
 
@@ -57,7 +127,7 @@ Extract the ICE40 configuration bitstream to understand the actual decoder imple
 iceunpack beyond_fpga.bin > beyond_fpga.asc
 
 # Step 3: Convert to Verilog for analysis
-# IceStorm can convert bitstream → routing → netlist
+# IceStorm can convert bitstream -> routing -> netlist
 ```
 
 **Difficulty**: Requires physical access to the FPGA's SPI flash. The Beyond's
@@ -80,9 +150,6 @@ works on Windows with NVIDIA, their PPS is known-good.
 echo 0x9F > /sys/module/drm/parameters/debug
 # Captures DP AUX reads/writes in dmesg
 ```
-
-**This is the most actionable approach.** If the NVIDIA PPS differs from what Linux
-produces at BPP=128, the difference reveals what the FPGA actually expects.
 
 ### 3. Formal Property Checking (SymbiYosys)
 
@@ -127,12 +194,12 @@ PPS fields one at a time while keeping others constant.
 # 2. Vary one field at a time toward BPP=128 values
 # 3. Binary search each field's boundary
 
-# Fields to test (BPP=144 → BPP=128):
-# initial_xmit_delay: 455 → 512 (binary search around 500)
-# initial_dec_delay: 790 → 856
-# initial_offset: 5888 → 6144
-# initial_scale_value: 28 → 32
-# slice_bpg_offset: 245 → 123
+# Fields to test (BPP=144 -> BPP=128):
+# initial_xmit_delay: 455 -> 512 (binary search around 500)
+# initial_dec_delay: 790 -> 856
+# initial_offset: 5888 -> 6144
+# initial_scale_value: 28 -> 32
+# slice_bpg_offset: 245 -> 123
 
 # This requires binary-patching individual PPS fields in amdgpu.ko
 # or intercepting drm_dsc_compute_rc_parameters() output.
@@ -165,11 +232,12 @@ against the FPGA's acceptance criteria. CI pipeline:
 
 ## Priority Order
 
-1. **USB PPS capture from NVIDIA** — most information, moderate effort
-2. **Upstream kernel patches** — proper dsc_fixed_bits_per_pixel_x16 path
-3. **Systematic PPS boundary testing** — can do today on honey
-4. **IceStorm bitstream extraction** — requires hardware access
-5. **SymbiYosys formal verification** — requires netlist from step 4
+1. **linux-xr kernel install + DisplayID path test** -- imminent, may resolve everything
+2. **PPS diff: DisplayID path vs. binary hack** -- if Step A fails
+3. **NVIDIA PPS capture** -- if PPS is identical between paths (9-bit theory)
+4. **Systematic PPS boundary testing** -- field-by-field isolation
+5. **IceStorm bitstream extraction** -- requires hardware access
+6. **SymbiYosys formal verification** -- requires netlist from step 5
 
 ## References
 

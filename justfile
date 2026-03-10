@@ -249,6 +249,56 @@ beyond-kernel-build host="honey" *args="":
     scp -q "{{setup_script}}" "{{project_root}}/patches/bigscreen-beyond-edid.patch" "{{project_root}}/patches/0007-vesa-dsc-bpp.patch" jess@{{host}}:/tmp/
     ssh jess@{{host}} "chmod +x /tmp/exwm-vr-setup && sudo /tmp/exwm-vr-setup kernel-build {{args}}"
 
+# ── deploy ────────────────────────────────────────────
+
+# Deploy all components to a host
+# Usage: just deploy honey [components]
+# Components: kernel, compositor, sway, monado, all (default: all)
+[group('deploy')]
+deploy host="honey" components="all":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Deploying to {{host}} ==="
+
+    if [[ "{{components}}" == "all" || "{{components}}" == *"kernel"* ]]; then
+        echo ">>> Checking kernel..."
+        LATEST=$(gh release view -R Jesssullivan/linux-xr --json tagName -q .tagName 2>/dev/null || echo "none")
+        echo "    Latest kernel release: ${LATEST}"
+    fi
+
+    if [[ "{{components}}" == "all" || "{{components}}" == *"compositor"* ]]; then
+        echo ">>> Building compositor..."
+        nix build .#compositor --out-link result-compositor
+        echo ">>> Copying to {{host}}..."
+        nix copy --to ssh://jess@{{host}} ./result-compositor
+    fi
+
+    if [[ "{{components}}" == "all" || "{{components}}" == *"sway"* ]]; then
+        echo ">>> Building sway..."
+        nix build .#sway-beyond --out-link result-sway
+        echo ">>> Copying to {{host}}..."
+        nix copy --to ssh://jess@{{host}} ./result-sway
+    fi
+
+    echo ">>> Running verification..."
+    just deploy-verify {{host}}
+
+# Post-deploy verification
+[group('deploy')]
+deploy-verify host="honey":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Verifying deployment on {{host}} ==="
+    ssh jess@{{host}} bash -s <<'VERIFY'
+    echo "Kernel: $(uname -r)"
+    echo "Sway: $(sway --version 2>/dev/null || echo 'not found')"
+    echo "Monado: $(monado-cli version 2>/dev/null || echo 'not found')"
+    echo "GPU: $(lspci | grep -i vga | head -1)"
+    echo "DRM: $(ls /dev/dri/card* 2>/dev/null | tr '\n' ' ')"
+    echo "Beyond USB: $(lsusb -d 35bd: 2>/dev/null || echo 'not connected')"
+    echo "non_desktop: $(cat /sys/class/drm/card*/DP-*/non_desktop 2>/dev/null | head -1 || echo 'N/A')"
+    VERIFY
+
 # ── kernel (linux-xr) ─────────────────────────────────
 
 linux_xr_repo := "Jesssullivan/linux-xr"

@@ -1,0 +1,80 @@
+name: Cache Warming
+
+on:
+  schedule:
+    - cron: '0 4 * * 1'  # Weekly Monday 4 AM UTC
+  workflow_dispatch:
+
+jobs:
+  warm-nix-cache:
+    runs-on: ${{ vars.USE_SELFHOSTED == 'true' && 'tinyland-nix' || 'ubuntu-latest' }}
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        if: vars.USE_SELFHOSTED != 'true'
+        uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Setup Attic
+        if: env.ATTIC_SERVER != ''
+        uses: ryanccn/attic-action@v0
+        with:
+          endpoint: ${{ secrets.ATTIC_SERVER }}
+          cache: ${{ secrets.ATTIC_CACHE }}
+          token: ${{ secrets.ATTIC_TOKEN }}
+
+      - name: Build x86_64 packages
+        run: |
+          echo "=== Building compositor ==="
+          nix build .#compositor --out-link result-compositor || true
+
+          echo "=== Building compositor-headless ==="
+          nix build .#compositor-headless --out-link result-headless || true
+
+          echo "=== Building ewwm-elisp ==="
+          nix build .#ewwm-elisp --out-link result-elisp || true
+
+          echo "=== Building sway-beyond ==="
+          nix build .#sway-beyond --out-link result-sway || true
+
+          echo "=== Building wlroots-beyond ==="
+          nix build .#wlroots-beyond --out-link result-wlroots || true
+
+          echo "=== Building kernel-xr ==="
+          nix build .#kernel-xr --out-link result-kernel || true
+
+      - name: Push to Attic
+        if: env.ATTIC_SERVER != ''
+        run: |
+          for link in result-compositor result-headless result-elisp result-sway result-wlroots result-kernel; do
+            if [ -L "$link" ]; then
+              echo "Pushing $link..."
+              attic push "$ATTIC_CACHE" "$link" || echo "Warning: failed to push $link"
+            fi
+          done
+
+      - name: Build cross targets
+        if: vars.USE_SELFHOSTED == 'true'
+        run: |
+          echo "=== Cross-building aarch64 compositor ==="
+          nix build .#packages.aarch64-linux.compositor --out-link result-aarch64 || true
+
+          echo "=== Cross-building aarch64 headless ==="
+          nix build .#packages.aarch64-linux.compositor-headless --out-link result-aarch64-headless || true
+
+          echo "=== Cross-building s390x headless ==="
+          nix build .#packages.s390x-linux.compositor-headless --out-link result-s390x || true
+
+      - name: Push cross targets to Attic
+        if: env.ATTIC_SERVER != '' && vars.USE_SELFHOSTED == 'true'
+        run: |
+          for link in result-aarch64 result-aarch64-headless result-s390x; do
+            if [ -L "$link" ]; then
+              echo "Pushing $link..."
+              attic push "$ATTIC_CACHE" "$link" || echo "Warning: failed to push $link"
+            fi
+          done

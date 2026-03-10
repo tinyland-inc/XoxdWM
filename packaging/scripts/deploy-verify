@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# deploy-verify — Post-deploy verification for EXWM-VR components
+# Returns exit 0 on success, 1 on failure.
+# Usage: deploy-verify [--strict]
+#   --strict: treat Beyond USB absence as failure (default: warn only)
+
+set -euo pipefail
+
+STRICT=0
+if [[ "${1:-}" == "--strict" ]]; then
+    STRICT=1
+fi
+
+FAIL=0
+WARN=0
+
+pass() { echo "  PASS: $1"; }
+fail() { echo "  FAIL: $1"; FAIL=1; }
+warn() { echo "  WARN: $1"; WARN=1; }
+
+echo "=== EXWM-VR Deploy Verification ==="
+echo ""
+
+# --- Kernel ---
+echo "--- Kernel ---"
+KVER=$(uname -r)
+echo "  Version: ${KVER}"
+if echo "${KVER}" | grep -qi "xr"; then
+    pass "Kernel contains 'xr' tag"
+else
+    fail "Kernel does not contain 'xr' tag (got: ${KVER})"
+fi
+
+# --- Sway ---
+echo "--- Sway ---"
+if command -v sway &>/dev/null; then
+    SWAY_VER=$(sway --version 2>/dev/null || echo "unknown")
+    echo "  Version: ${SWAY_VER}"
+    pass "sway binary found"
+else
+    fail "sway binary not found in PATH"
+fi
+
+# --- Monado ---
+echo "--- Monado ---"
+if command -v monado-cli &>/dev/null; then
+    pass "monado-cli binary found"
+    if monado-cli probe &>/dev/null; then
+        pass "monado-cli probe found devices"
+    else
+        warn "monado-cli probe found no devices (HMD may be off)"
+    fi
+else
+    fail "monado-cli binary not found in PATH"
+fi
+
+# --- DRM connectors ---
+echo "--- DRM ---"
+DRM_CARDS=$(ls /dev/dri/card* 2>/dev/null || true)
+if [[ -n "${DRM_CARDS}" ]]; then
+    echo "  Cards: ${DRM_CARDS}"
+    pass "DRM card devices present"
+else
+    fail "No DRM card devices found in /dev/dri/"
+fi
+
+# Check for non_desktop connectors (Beyond headset)
+NON_DESKTOP=$(cat /sys/class/drm/card*/DP-*/non_desktop 2>/dev/null | head -1 || true)
+if [[ "${NON_DESKTOP}" == "1" ]]; then
+    pass "non_desktop=1 connector found (HMD)"
+else
+    warn "No non_desktop=1 connector found"
+fi
+
+# --- Beyond USB ---
+echo "--- Beyond USB ---"
+BEYOND_USB=$(lsusb -d 35bd: 2>/dev/null || true)
+if [[ -n "${BEYOND_USB}" ]]; then
+    echo "  ${BEYOND_USB}"
+    pass "Beyond USB device detected"
+else
+    if [[ "${STRICT}" -eq 1 ]]; then
+        fail "Beyond USB device not detected (vendor 35bd)"
+    else
+        warn "Beyond USB device not detected (vendor 35bd)"
+    fi
+fi
+
+# --- GPU ---
+echo "--- GPU ---"
+GPU=$(lspci 2>/dev/null | grep -i vga | head -1 || true)
+if [[ -n "${GPU}" ]]; then
+    echo "  ${GPU}"
+    pass "GPU detected"
+else
+    warn "No VGA device found via lspci"
+fi
+
+# --- Summary ---
+echo ""
+echo "=== Summary ==="
+if [[ "${FAIL}" -eq 0 ]]; then
+    echo "  All required checks passed."
+    if [[ "${WARN}" -gt 0 ]]; then
+        echo "  (some warnings — see above)"
+    fi
+    exit 0
+else
+    echo "  One or more checks FAILED — see above."
+    exit 1
+fi

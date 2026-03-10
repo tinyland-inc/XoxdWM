@@ -2,7 +2,7 @@
 #
 # Two build modes:
 #   1. Nix kernel derivation (NixOS deployments)
-#   2. RPM kernel build (Rocky Linux deployments via rpmbuild)
+#   2. RPM kernel build (Rocky Linux deployments via rpmbuild) — WIP/placeholder
 #
 # Patches:
 #   - bigscreen-beyond-edid.patch: EDID non-desktop quirk (BIG/0x1234)
@@ -11,15 +11,17 @@
 #
 # CI integration:
 #   Build via GloriousFlywheel ARC runners, cache via Attic.
-#   RPMs published to private repo for Rocky deployments.
+#   RPMs are built by the linux-xr CI pipeline, not this derivation.
 #
 # Usage (NixOS):
 #   boot.kernelPackages = pkgs.linuxPackages_xr;
 #
-# Usage (Rocky Linux):
-#   nix build .#kernel-xr-rpm  # produces RPM in result/
+# Attic caching flow:
+#   nix build .#kernel-xr  ->  attic push xr-cache result/
+#   Subsequent builds on machines with the xr-cache substituter
+#   get binary substitution instead of rebuilding the kernel.
 #
-{ lib, linuxKernel, fetchpatch, pkgs, ... }:
+{ lib, linuxKernel, fetchpatch, fetchurl, pkgs, ... }:
 
 let
   patchDir = ../../patches;
@@ -58,31 +60,75 @@ let
     DRM = yes;
   };
 
-  # RT preemption config
+  # RT preemption config (applied when enableRT = true)
   rtConfig = with lib.kernel; {
     PREEMPT_RT = yes;
     PREEMPT_VOLUNTARY = lib.mkForce no;
+    # RT needs full preemption, disable voluntary
+    PREEMPT = lib.mkForce no;
+    PREEMPT_DYNAMIC = lib.mkForce no;
   };
 
-  mkXrKernel = { baseKernel, extraPatches ? [], extraConfig ? {} }:
+  # Fetch the PREEMPT_RT patch for a given kernel version.
+  # RT patch versions trail mainline slightly; adjust rtVersion as needed.
+  #
+  # Find available RT patches at:
+  #   https://cdn.kernel.org/pub/linux/kernel/projects/rt/
+  fetchRtPatch = { kernelVersion, rtVersion }:
+    let
+      majorMinor = lib.versions.majorMinor kernelVersion;
+    in {
+      name = "preempt-rt-${rtVersion}";
+      patch = fetchurl {
+        url = "https://cdn.kernel.org/pub/linux/kernel/projects/rt/${majorMinor}/patch-${rtVersion}.patch.xz";
+        # Set the real sha256 after first fetch attempt:
+        #   nix-prefetch-url --unpack <url>
+        # or let the build fail and copy the hash from the error message.
+        sha256 = lib.fakeHash;
+      };
+    };
+
+  mkXrKernel = {
+    baseKernel,
+    enableRT ? false,
+    rtVersion ? null,
+    extraPatches ? [],
+    extraConfig ? {},
+  }:
+    let
+      rtPatches = lib.optionals (enableRT && rtVersion != null) [
+        (fetchRtPatch {
+          kernelVersion = baseKernel.version;
+          inherit rtVersion;
+        })
+      ];
+    in
     baseKernel.override {
-      structuredExtraConfig = xrConfig // extraConfig;
+      structuredExtraConfig = xrConfig
+        // (lib.optionalAttrs enableRT rtConfig)
+        // extraConfig;
       kernelPatches = (baseKernel.kernelPatches or [])
         ++ localPatches
+        ++ rtPatches
         ++ extraPatches;
     };
 
 in {
+  inherit mkXrKernel localPatches xrConfig rtConfig;
+
   # Standard XR kernel (latest mainline + patches)
   xrKernel = baseKernel: mkXrKernel { inherit baseKernel; };
 
-  # RT XR kernel
-  xrKernelRT = baseKernel: mkXrKernel {
-    inherit baseKernel;
-    extraConfig = rtConfig;
+  # RT XR kernel (requires rtVersion to be specified)
+  xrKernelRT = baseKernel: rtVersion: mkXrKernel {
+    inherit baseKernel rtVersion;
+    enableRT = true;
   };
 
-  # RPM build for Rocky Linux (wraps kernel source + patches into rpmbuild)
+  # RPM build for Rocky Linux — WIP/placeholder.
+  # This derivation will NOT build as-is: sha256 is a placeholder
+  # and the spec file path needs updating for your local tree.
+  # For production RPM builds, use the linux-xr CI pipeline.
   xrKernelRpm = { kernelVersion ? "6.19.5" }:
     pkgs.stdenv.mkDerivation {
       pname = "kernel-xr-rpm";
@@ -90,12 +136,13 @@ in {
 
       src = pkgs.fetchurl {
         url = "https://cdn.kernel.org/pub/linux/kernel/v${lib.versions.major kernelVersion}.x/linux-${kernelVersion}.tar.xz";
-        # sha256 must be updated per version
-        sha256 = lib.fakeSha256;
+        # Replace with real sha256 for the target kernel version:
+        #   nix-prefetch-url https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.19.5.tar.xz
+        sha256 = lib.fakeHash;
       };
 
       nativeBuildInputs = with pkgs; [
-        rpm rpmbuild
+        rpm
         gcc gnumake perl bc bison flex rsync
         elfutils openssl
         xz
@@ -106,6 +153,9 @@ in {
       buildPhase = ''
         cp ${patchDir + "/bigscreen-beyond-edid.patch"} .
         cp ${patchDir + "/0007-vesa-dsc-bpp.patch"} .
+
+        # NOTE: spec file path assumes packaging/rpm/kernel-xr.spec exists.
+        # Adjust if your tree uses a different location.
         cp ${../../packaging/rpm/kernel-xr.spec} kernel-xr.spec
 
         mkdir -p rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
@@ -123,6 +173,4 @@ in {
         cp rpmbuild/RPMS/*/*.rpm $out/ || true
       '';
     };
-
-  inherit localPatches xrConfig;
 }

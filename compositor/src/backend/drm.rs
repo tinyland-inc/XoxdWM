@@ -1010,23 +1010,18 @@ pub fn run(socket_name: Option<String>, ipc_config: IpcConfig) -> anyhow::Result
         // to the headset via Monado.
         #[cfg(feature = "vr")]
         if state.vr_state.enabled {
-            use openxrs as xr;
-
             state.vr_state.poll_events();
 
             if let Some(frame_data) = state.vr_state.tick_frame() {
                 if frame_data.should_render {
                     let view_configs = state.vr_state.view_config_views().to_vec();
 
-                    // Acquire and release each eye's swapchain image.
-                    // TODO: render actual scene content into swapchain images
-                    // via vr_renderer::render_frame_to_swapchains().
-                    for swapchain in state.vr_state.swapchains_mut().iter_mut() {
-                        if let Ok(_image_idx) = swapchain.acquire_image() {
-                            let _ = swapchain.wait_image(xr::Duration::INFINITE);
-                            swapchain.release_image().ok();
-                        }
-                    }
+                    // Render scene content into swapchain images (or
+                    // fall back to black frames if renderer not ready).
+                    state.vr_state.render_vr_frame(
+                        &frame_data.views,
+                        &view_configs,
+                    );
 
                     // Build projection layers and submit frame.
                     let swapchain_count = state.vr_state.swapchain_images().len();

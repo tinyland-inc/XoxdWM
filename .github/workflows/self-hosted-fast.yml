@@ -65,11 +65,14 @@ jobs:
           cache: ${{ env.ATTIC_CACHE }}
           token: ${{ secrets.ATTIC_TOKEN }}
 
+      - name: Setup sccache
+        uses: ./.github/actions/setup-sccache
+
       - name: Build compositor (full + VR)
-        run: nix build .#compositor
+        run: nix build .#compositor --out-link result-compositor
 
       - name: Build headless compositor
-        run: nix build .#compositor-headless
+        run: nix build .#compositor-headless --out-link result-headless
 
       - name: Run Rust tests
         run: |
@@ -78,10 +81,20 @@ jobs:
             cargo test --features full-backend,vr 2>&1 || cargo test --no-default-features
           "
 
+      - name: sccache stats
+        if: always()
+        shell: bash
+        run: sccache --show-stats
+
       - name: Push to Attic cache
         if: env.ATTIC_SERVER != '' && github.event_name == 'push'
         run: |
-          attic push "$ATTIC_CACHE" result result-1 2>/dev/null || true
+          for link in result result-compositor result-headless result-elisp; do
+            if [ -L "$link" ]; then
+              echo "Pushing $link to Attic..."
+              attic push "$ATTIC_CACHE" "$link" || echo "Warning: failed to push $link"
+            fi
+          done
 
   fast-vr:
     name: Fast VR Smoke (self-hosted)
