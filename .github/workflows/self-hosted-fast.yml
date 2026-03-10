@@ -57,7 +57,7 @@ jobs:
     name: Fast Build (self-hosted)
     if: vars.USE_SELFHOSTED == 'true'
     runs-on: tinyland-nix
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
