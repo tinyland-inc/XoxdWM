@@ -15,12 +15,10 @@ jobs:
   byte-compile:
     name: Byte Compile
     runs-on: ${{ vars.USE_SELFHOSTED == 'true' && 'tinyland-nix' || 'ubuntu-latest' }}
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v30
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
-        continue-on-error: true
       - uses: ryanccn/attic-action@v0
         if: env.ATTIC_SERVER != ''
         with:
@@ -33,12 +31,10 @@ jobs:
   ert-test:
     name: ERT Tests
     runs-on: ${{ vars.USE_SELFHOSTED == 'true' && 'tinyland-nix' || 'ubuntu-latest' }}
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v30
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
-        continue-on-error: true
       - uses: ryanccn/attic-action@v0
         if: env.ATTIC_SERVER != ''
         with:
@@ -51,12 +47,10 @@ jobs:
   lint:
     name: Lint Elisp
     runs-on: ${{ vars.USE_SELFHOSTED == 'true' && 'tinyland-nix' || 'ubuntu-latest' }}
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v30
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
-        continue-on-error: true
       - uses: ryanccn/attic-action@v0
         if: env.ATTIC_SERVER != ''
         with:
@@ -69,12 +63,10 @@ jobs:
   nix-build:
     name: Nix Build
     runs-on: ${{ vars.USE_SELFHOSTED == 'true' && 'tinyland-nix' || 'ubuntu-latest' }}
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v30
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
-        continue-on-error: true
       - uses: ryanccn/attic-action@v0
         if: env.ATTIC_SERVER != ''
         with:
@@ -89,14 +81,12 @@ jobs:
   changelog-validate:
     name: Changelog Validate
     runs-on: ${{ vars.USE_SELFHOSTED == 'true' && 'tinyland-nix' || 'ubuntu-latest' }}
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - uses: cachix/install-nix-action@v30
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
-        continue-on-error: true
       - uses: ryanccn/attic-action@v0
         if: env.ATTIC_SERVER != ''
         with:
