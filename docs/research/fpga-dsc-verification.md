@@ -1,4 +1,4 @@
-# ICE40 DSC Decoder: Formal Verification Notes
+# Beyond DSC Decoder: Hardware Identification & Verification Notes
 
 ## Current Status (2026-03-10)
 
@@ -28,14 +28,60 @@ same nominal BPP. The kernel install may resolve the question entirely.
 
 ## Context
 
-The Bigscreen Beyond 2e uses a Lattice ICE40 HX8K FPGA as its DSC (Display Stream
-Compression) decoder. The FPGA sits between the DP receiver and the dual MIPI display
-panels. It receives PPS (Picture Parameter Set) metadata + compressed pixel data over DP
-and outputs decompressed pixels to the panels.
+### Hardware Architecture (researched 2026-03-10)
 
-The FPGA's behavior is the ground truth for what DSC parameters work. Kernel-side fixes
-(QP tables, RC offsets, BPP negotiation) are only useful if the resulting PPS is accepted
-by the FPGA decoder.
+The Beyond's DSC decoder architecture is **not publicly confirmed**. Our original
+assumption of a "Lattice ICE40 HX8K FPGA" is **UNVERIFIED** — no teardown, FCC filing,
+or Bigscreen documentation names the DSC decoder chip. The FCC filing (2BCCB-BS1) has
+internal photos under confidentiality hold.
+
+**Most likely candidate: Analogix ANX7530 or ANX7580**
+
+The Analogix ANX753x/7580 family are purpose-built DP-to-MIPI converters for VR HMDs
+with integrated DSC support:
+
+| Chip | MIPI Output | DSC | Resolution | Package |
+|------|-------------|-----|------------|---------|
+| ANX7530 | 2x 8-lane (16 total) | No (HW split) | 4K@60Hz, 2K@120Hz/eye | 5x5mm BGA |
+| ANX7533 | 2x 4-lane (8 total) | 3:1 DSC | 1920x1440/eye | 5x5mm BGA |
+| ANX7580 | 1x 4-lane (single) | 3:1 DSC | 4K@60Hz single panel | 5x5mm BGA |
+
+The Beyond 2e has dual 2560x2544 micro-OLED panels at 90Hz. Pixel throughput:
+- Per eye: 2560 × 2544 × 90 = 586M pixels/sec
+- Total: ~1.17G pixels/sec
+- At 24bpp uncompressed: ~28 Gbps → requires DSC at ~3-4:1 compression
+- DP 1.4 4-lane HBR3: 32.4 Gbps (sufficient for compressed stream)
+
+The ANX7530 (dual 8-lane MIPI, no DSC, 2K@120Hz/eye) could drive the panels IF the
+GPU-side DSC produces a decoded stream at the DP receiver. Alternatively, the ANX7533
+(with DSC) could handle 2560x2544/eye at lower bit rates.
+
+A dedicated FPGA (ICE40 or CrossLink) is also possible but adds cost and board area
+vs. an integrated Analogix solution. The 9-bit register hypothesis remains relevant
+regardless of whether DSC decoding happens in an FPGA or in the Analogix chip's
+DSC decoder block.
+
+### Known USB IDs
+
+| Device | USB VID:PID | Description |
+|--------|-------------|-------------|
+| Beyond HMD | 35bd:0101 | HID + Audio composite |
+| Bigeye tracker | 35bd:0202 | UVC eye camera |
+| Audio Strap | 35bd:0105 | Audio accessory |
+| Firmware mode | 35bd:4004 | DFU/update mode |
+
+### What We Don't Know
+
+1. **DSC decoder identity**: FPGA vs ASIC vs Analogix integrated — no teardown confirms
+2. **Microcontroller**: USB HID vendor 0x35bd is Bigscreen's own VID; MCU unknown
+3. **Display panel vendor**: Micro-OLED 2560x2544, likely Sony or BOE, unconfirmed
+4. **SPI flash / FPGA bitstream**: Only relevant if the DSC decoder IS an FPGA
+
+### DSC Decoder Behavior
+
+Regardless of silicon identity, the DSC decoder's behavior is the ground truth for
+what parameters work. Kernel-side fixes (QP tables, RC offsets, BPP negotiation) are
+only useful if the resulting PPS is accepted by the decoder.
 
 ## Observed Behavior
 
@@ -76,12 +122,20 @@ Both terms are well-defined but term 1 evaluates to exactly 512 -- the spec mini
 this BPP. This is NOT a coincidence; 8.0 BPP is the boundary where the RC model buffer
 math hits exactly 2^9.
 
-### 9-Bit Register Hypothesis: Still Plausible but Weakened
+### 9-Bit Register Hypothesis: Weakened by Hardware Research
 
 The NVIDIA Windows driver may compute different PPS because it uses its own DSC parameter
 computation, not the kernel's `drm_dsc_compute_rc_parameters()`. If NVIDIA produces a
 working PPS at BPP=8.0, the difference could be in the computation rather than a register
 width limitation.
+
+**If the DSC decoder is an Analogix ANX753x**: The 9-bit register theory is unlikely.
+Analogix chips are production silicon designed to the DSC spec — they would use
+spec-compliant register widths. The failure at BPP=8.0 would more likely be a PPS
+computation issue in the kernel driver.
+
+**If the DSC decoder is an FPGA**: The 9-bit register theory remains plausible, as
+custom FPGA implementations could have non-standard register widths.
 
 The "different code path" theory (binary hack vs. proper DisplayID path) is currently
 stronger than the 9-bit register theory because:
@@ -242,14 +296,21 @@ against the FPGA's acceptance criteria. CI pipeline:
 2. **PPS diff: DisplayID path vs. binary hack** -- if Step A fails
 3. **NVIDIA PPS capture** -- if PPS is identical between paths (9-bit theory)
 4. **Systematic PPS boundary testing** -- field-by-field isolation
-5. **IceStorm bitstream extraction** -- requires hardware access
-6. **SymbiYosys formal verification** -- requires netlist from step 5
+5. **Hardware identification** -- PCB photos to confirm DSC decoder chip
+6. **IceStorm bitstream extraction** -- only if decoder is confirmed FPGA
+7. **SymbiYosys formal verification** -- requires netlist from step 6
 
 ## References
 
 - VESA DSC 1.2a specification (section 3.2: RC parameter computation)
+- Analogix ANX753x/7580 family: https://www.analogix.com/en/products/dp-mipi-converters/anx7580
+- Analogix ANX7530 (dual MIPI for VR): https://www.analogix.com/en/products/dp-mipi-converters/anx7530
+- Analogix HMD product brief (2018): https://2384176.fs1.hubspotusercontent-na1.net/hubfs/2384176/DevCon-Seoul-2018/2018-MIPI-DevCon-Rodriguez-Analogix-High-Performance-VR-Apps.pdf
+- Alma Technologies DSC IP cores: https://www.alma-technologies.com/ip-core.DSC-1.2b-IP
+- FCC filing 2BCCB-BS1 (Bigscreen VR Headset): https://fcc.report/FCC-ID/2BCCB-BS1
+- Linux VR Adventures wiki (Beyond): https://lvra.gitlab.io/docs/hardware/bigscreen-beyond/
+- Bigscreen Beyond 2 official teardown: https://store.bigscreenvr.com/blogs/beyond/inside-bigscreen-beyond-2-the-teardown
 - Project IceStorm: https://github.com/YosysHQ/icestorm
 - SymbiYosys: https://github.com/YosysHQ/sby
-- Yosys: https://github.com/YosysHQ/yosys
-- Lattice ICE40 HX8K datasheet: https://www.latticesemi.com/iCE40
+- Lattice CrossLink (MIPI bridging FPGA): https://www.latticesemi.com/Products/FPGAandCPLD/CrossLink
 - CachyOS kernel-patches: https://github.com/CachyOS/kernel-patches
