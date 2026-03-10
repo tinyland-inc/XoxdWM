@@ -333,6 +333,26 @@ beyond-kernel-verify host="honey":
     echo "=== Kernel verification on {{host}} ==="
     ssh jess@{{host}} "uname -r && zcat /proc/config.gz 2>/dev/null | grep -E 'HZ=|PREEMPT_RT|DRM_AMD_DC_DSC|USB_HIDDEV' || grep -E 'HZ=|PREEMPT_RT|DRM_AMD_DC_DSC|USB_HIDDEV' /boot/config-\$(uname -r)"
 
+# Dump DSC PPS from debugfs and verify QP/RC fix is active.
+# Requires Beyond to be connected and display active on DP-2.
+[group('vr')]
+beyond-kernel-pps host="honey" connector="DP-2":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== DSC PPS dump from {{host}} ({{connector}}) ==="
+    PPS=$(ssh jess@{{host}} "sudo cat /sys/kernel/debug/dri/1/{{connector}}/dsc_pic_parameter_set 2>/dev/null || echo 'NOT_FOUND'")
+    if [ "$PPS" = "NOT_FOUND" ]; then
+        echo "PPS not available — is DSC active on {{connector}}?"
+        echo "Try: ssh jess@{{host}} 'ls /sys/kernel/debug/dri/*/'"
+        exit 1
+    fi
+    echo "$PPS"
+    echo ""
+    echo "=== QP/RC fix verification ==="
+    echo "Check rc_range_params bytes 77-87 against expected patched values:"
+    echo "  PPS[77]=0x83 PPS[79]=0xC5 PPS[80]=0xA3 PPS[81]=0x05"
+    echo "  PPS[82]=0xA3 PPS[83]=0x45 PPS[85]=0x47 PPS[87]=0xCD"
+
 # ── dev ────────────────────────────────────────────────
 
 [group('dev')]

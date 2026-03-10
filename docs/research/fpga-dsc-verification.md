@@ -231,6 +231,65 @@ The CachyOS patch fixes both:
 Both are needed: the parser without QP/RC fix would still produce a bad PPS, and the
 QP/RC fix without the parser requires manual intervention to set BPP=128.
 
+## PPS Byte-Level Diff: Stock vs Patched Kernel
+
+### Full rc_range_params Table (15 ranges, BPP=8.0, 8bpc 4:4:4 RGB)
+
+| Range | Stock ofs | Stock max | Stock min | Patched ofs | Patched max | Patched min | Changed? |
+|------:|----------:|----------:|----------:|------------:|------------:|------------:|----------|
+| 0     | +2        | 4         | 0         | +2          | 4           | 0           | —        |
+| 1     | 0         | 4         | 0         | 0           | 4           | 0           | —        |
+| 2     | 0         | 5         | 1         | 0           | 5           | 1           | —        |
+| 3     | -2        | 6         | 1         | -2          | 6           | 1           | —        |
+| 4     | -4        | 7         | 3         | -4          | 7           | 3           | —        |
+| 5     | -6        | 7         | 3         | -6          | 7           | 3           | —        |
+| 6     | -8        | 7         | 3         | -8          | 7           | 3           | —        |
+| 7     | -8        | 8         | 3         | -8          | 8           | 3           | —        |
+| 8     | -8        | 9         | 3         | -8          | 9           | 3           | —        |
+| 9     | -10       | 10        | **4**     | -10         | 10          | **3**       | min_qp   |
+| 10    | -10       | **10**    | 5         | -10         | **11**      | 5           | max_qp   |
+| 11    | **-10**   | **11**    | 5         | **-12**     | **12**      | 5           | ofs, max |
+| 12    | -12       | **11**    | 5         | -12         | **13**      | 5           | max_qp   |
+| 13    | -12       | **12**    | **8**     | -12         | **13**      | **7**       | max, min |
+| 14    | -12       | **13**    | **12**    | -12         | **15**      | **13**      | max, min |
+
+### PPS Byte Encoding
+
+Each range is a big-endian 16-bit word at PPS bytes 58-87:
+- Bits [15:11] = `range_bpg_offset` (5-bit 2's complement)
+- Bits [10:6] = `range_max_qp` (5 bits unsigned)
+- Bits [4:0] = `range_min_qp` (5 bits unsigned)
+
+### Changed PPS Bytes (8 of 30)
+
+| PPS Byte | Range | Stock | Patched | Notes |
+|---------:|------:|------:|--------:|-------|
+| 77       | 9     | 0x84  | 0x83    | min_qp: 4→3 |
+| 79       | 10    | 0x85  | 0xC5    | max_qp: 10→11 |
+| 80       | 11    | 0xB2  | 0xA3    | ofs: -10→-12, max_qp: 11→12 |
+| 81       | 11    | 0xC5  | 0x05    | (cont'd) |
+| 82       | 12    | 0xA2  | 0xA3    | max_qp: 11→13 |
+| 83       | 12    | 0xC5  | 0x45    | (cont'd) |
+| 85       | 13    | 0x08  | 0x47    | max_qp: 12→13, min_qp: 8→7 |
+| 87       | 14    | 0x4C  | 0xCD    | max_qp: 13→15, min_qp: 12→13 |
+
+### What This Means
+
+Ranges 9-14 control rate buffer behavior at **high buffer fullness** — the later
+stages of DSC decoding where the buffer is most stressed. The stock kernel's values
+at BPP=8.0 are too conservative: narrow QP ranges and insufficient negative bpg_offset
+at range 11 prevent the rate controller from managing bit allocation at this operating
+point. The decoder sees rate control states that violate its internal constraints and
+rejects the stream.
+
+The patched values widen the QP operating range and strengthen the negative pressure
+at range 11 (`-10` → `-12`), giving the rate controller room to converge. This matches
+the VESA DSC 1.1 reference model output (Table E-5).
+
+**Verification on honey**: After installing the XR kernel, dump PPS from
+`/sys/kernel/debug/dri/1/DP-2/dsc_pic_parameter_set` and confirm bytes 77-87
+match the patched values above. If they do, the QP/RC fix is active.
+
 ## Next Verification Steps
 
 **Step A**: Install linux-xr kernel (v6.19.5-xr1) on honey. The patched kernel has
@@ -385,6 +444,7 @@ against the FPGA's acceptance criteria. CI pipeline:
 
 ## References
 
+- VESA DSC 1.1 specification, Annex E, Table E-5: RC range parameters for 8bpc 4:4:4
 - VESA DSC 1.2a specification (section 3.2: RC parameter computation)
 - Analogix ANX753x/7580 family: https://www.analogix.com/en/products/dp-mipi-converters/anx7580
 - Analogix ANX7530 (dual MIPI for VR): https://www.analogix.com/en/products/dp-mipi-converters/anx7530
@@ -397,3 +457,6 @@ against the FPGA's acceptance criteria. CI pipeline:
 - SymbiYosys: https://github.com/YosysHQ/sby
 - Lattice CrossLink (MIPI bridging FPGA): https://www.latticesemi.com/Products/FPGAandCPLD/CrossLink
 - CachyOS kernel-patches: https://github.com/CachyOS/kernel-patches
+- CachyOS issue #731 (DSC patch integration): https://github.com/CachyOS/linux-cachyos/issues/731
+- raika-xino AMD DSC fix (MIT): https://github.com/raika-xino/amd-bsb-dsc-fix
+- VESA DSC 1.2 spec (hosted): https://glenwing.github.io/docs/VESA-DSC-1.2.pdf

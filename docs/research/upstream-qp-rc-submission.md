@@ -71,6 +71,17 @@ Tested-by: Jess Sullivan <jess@jesssullivan.dev> # RX 9070 XT + Beyond 2e
 Cc: stable@vger.kernel.org
 ```
 
+## Attribution
+
+raika-xino's repo (MIT licensed) states: "This patch corrects the `max_qp` limits in
+the `amdgpu` DSC RC parameter tables to match VESA DSC 1.1 Table E-5." It is "an
+AMD-specific port based on the findings from nvidia-bsb-dsc-fix."
+
+Testing environment (raika-xino): AMD RX 9070 XT, kernel 6.19.2, Gentoo/NixOS, Monado,
+Bigscreen Beyond 2e. Symptom: "rainbow static" artifacts resolved by the patch.
+
+CachyOS applied to both 6.19 and 7.0 kernels (issue #731, closed as completed).
+
 ## Steps
 
 1. [ ] Contact raika-xino re: attribution (Co-developed-by vs Reported-by)
