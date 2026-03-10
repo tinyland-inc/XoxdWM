@@ -1,15 +1,21 @@
 # ICE40 DSC Decoder: Formal Verification Notes
 
-## Current Status
+## Current Status (2026-03-10)
 
-The linux-xr kernel build is in progress (CI RPM: CachyOS combined patch + RT). Once
-installed on honey, the VESA DisplayID parser path will be the first thing tested.
+The linux-xr kernel RPMs are built via CI (GitHub Actions, `Jesssullivan/linux-xr`
+`xr/main` branch). The build includes the CachyOS combined patch (`0007-vesa-dsc-bpp.patch`),
+the standalone QP/RC fix (`amd-bsb-dsc-fix.patch`), and the EDID non_desktop quirk
+(`bigscreen-beyond-edid.patch`). RT support is optional via workflow dispatch.
 
-This is significant because the DisplayID path takes a DIFFERENT code path through
-amdgpu_dm than the `dsc_policy_max_target_bpp_limit` binary hack that was used for
-initial BPP=128 testing. The binary hack produced BPP=128 but displays went dark.
-The proper patch uses `dsc_fixed_bits_per_pixel_x16` from the EDID VESA vendor block,
-which feeds into:
+Nix kernel derivation is also functional at `nix/kernel/xr-kernel.nix` and exposed
+as `packages.kernel-xr` in the flake.
+
+**Next step**: install XR kernel on honey and verify the VESA DisplayID parser path.
+
+The DisplayID path takes a DIFFERENT code path through amdgpu_dm than the
+`dsc_policy_max_target_bpp_limit` binary hack that was used for initial BPP=128
+testing. The binary hack produced BPP=128 but displays went dark. The proper patch
+uses `dsc_fixed_bits_per_pixel_x16` from the EDID VESA vendor block, which feeds into:
 
 ```
 dm_helpers_read_local_edid()

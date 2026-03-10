@@ -37,52 +37,46 @@ sudo dracut --force  # Rebuild initramfs
 
 ---
 
-## Phase 2: Kernel Upgrade
+## Phase 2: Kernel Upgrade — DONE (2026-03-10)
 
-Rocky 10 ships kernel 6.12 and won't upgrade to 6.13+.
-Build a custom kernel with:
-- Mainline 6.14.x (current stable)
-- Bigscreen Beyond EDID non_desktop quirk patch
-- All RDNA 4 display fixes
+Rocky 10 ships kernel 6.12 and won't upgrade to 6.13+. Custom kernel built
+via `Jesssullivan/linux-xr` CI with all XR patches applied.
 
-### Option A: ELRepo (easiest)
+### Option A: linux-xr RPM (current approach)
+```bash
+# Download from GitHub Releases and install:
+just beyond-kernel-install honey v6.19.5-xr1
+# Or manually:
+gh release download v6.19.5-xr1 -R Jesssullivan/linux-xr -p "kernel-xr-*.rpm"
+sudo dnf install kernel-xr-*.rpm
+```
+
+Patches applied by linux-xr CI:
+- `bigscreen-beyond-edid.patch` — EDID non_desktop quirk (BIG/0x1234 + BIG/0x5095)
+- `0007-vesa-dsc-bpp.patch` — CachyOS combined (QP tables + RC offset + VESA DisplayID parser)
+- `amd-bsb-dsc-fix.patch` — standalone QP/RC fix (subset of 0007)
+- RT patches (optional, via workflow dispatch)
+
+### Option B: Nix-managed Kernel
+```nix
+# Already in flake.nix:
+nix build .#kernel-xr
+# Or use the overlay:
+nixpkgs.overlays = [ exwm.overlays.kernel-beyond ];
+boot.kernelPackages = pkgs.linuxPackages_beyond;
+```
+
+### Option C: ELRepo (baseline, no XR patches)
 ```bash
 sudo dnf install elrepo-release
 sudo dnf --enablerepo=elrepo-kernel install kernel-ml
-# Then apply the BSB EDID quirk via module parameter or DKMS
-```
-
-### Option B: Build from Source
-```bash
-# Get kernel source
-git clone --depth 1 -b v6.14 https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
-cd linux
-
-# Apply BSB patch (one-liner in drm_edid.c)
-# EDID_QUIRK('B', 'I', 'G', 0x1234, EDID_QUIRK_NON_DESKTOP)
-
-# Build with Rocky 10 config as base
-cp /boot/config-$(uname -r) .config
-make olddefconfig
-make -j$(nproc) rpm-pkg
-sudo rpm -ivh ~/rpmbuild/RPMS/x86_64/kernel-*.rpm
-```
-
-### Option C: Nix-managed Kernel (preferred for reproducibility)
-```nix
-# In flake.nix or separate nix expression
-linuxPackages_6_14.kernel.override {
-  extraPatches = [
-    { name = "bigscreen-beyond-non-desktop";
-      patch = ./patches/bigscreen-beyond-edid.patch; }
-  ];
-};
 ```
 
 ### Reboot to new kernel, verify:
 ```bash
-uname -r  # Should be 6.14.x
+uname -r  # Should be 6.19.5-1.xr.el10
 dmesg | grep -i "smu driver"  # Should NOT show version mismatch
+just beyond-kernel-verify honey
 ```
 
 ---

@@ -264,13 +264,13 @@ work. Formal verification approaches:
 | EDID non_desktop quirk | `patches/bigscreen-beyond-edid.patch` | ✓ Correct |
 | DSC QP + RC fix | `patches/amd-bsb-dsc-fix.patch` | ✓ Correct (ofs[11] fixed) |
 | wlroots non_desktop | `patches/wlroots-bigscreen-non-desktop.patch` | ✓ Correct |
-| VESA DisplayID DSC BPP | not yet in repo | **NEEDED** — fetch from CachyOS or upstream |
+| VESA DisplayID DSC BPP | `patches/0007-vesa-dsc-bpp.patch` | ✓ In repo (CachyOS combined) |
 
 **Action items**:
 1. ~~Fix `amd-bsb-dsc-fix.patch` to target ofs[11] instead of ofs[10]~~ DONE
-2. Add CachyOS 0007 patch (or upstream 7-patch series) to repo
-3. Build kernel RPMs with all patches
-4. Test on honey with full pipeline
+2. ~~Add CachyOS 0007 patch to repo~~ DONE (commit 63bb884)
+3. ~~Build kernel RPMs with all patches~~ DONE (linux-xr CI, `v6.19.5-xr1`)
+4. Test on honey with full pipeline — **PENDING** (install XR kernel + reboot)
 
 ## References
 
