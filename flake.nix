@@ -182,7 +182,8 @@
               };
             };
 
-        in {
+        in builtins.foldl' pkgs.lib.recursiveUpdate {} [
+          {
           devShells.default = pkgs.mkShell {
             inherit buildInputs;
 
@@ -250,7 +251,8 @@
             cp ${./lisp/vr}/*.el $out/share/emacs/site-lisp/ewwm/vr/ 2>/dev/null || true
             cp ${./lisp/ext}/*.el $out/share/emacs/site-lisp/ewwm/ext/ 2>/dev/null || true
           '';
-        } // (pkgs.lib.optionalAttrs (pkgs.stdenv.isLinux) (
+          }
+          (pkgs.lib.optionalAttrs (pkgs.stdenv.isLinux) (
           let
             kLib = xrKernelLib {
               inherit (pkgs) lib linuxKernel fetchpatch fetchurl;
@@ -285,7 +287,8 @@
             packages.sway-beyond = sway-beyond;
             packages.monado-beyond = monado-beyond;
           }
-        )) // (pkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          ))
+          (pkgs.lib.optionalAttrs (system == "x86_64-linux") {
           # NixOS VM integration tests (require KVM)
           checks.boot-test = import ./nix/tests/boot-test.nix {
             inherit pkgs self;
@@ -293,7 +296,8 @@
           checks.full-stack-test = import ./nix/tests/full-stack-test.nix {
             inherit pkgs self home-manager;
           };
-        })
+          })
+        ]
       );
 
       # Cross-compilation outputs (not produced by eachDefaultSystem)
