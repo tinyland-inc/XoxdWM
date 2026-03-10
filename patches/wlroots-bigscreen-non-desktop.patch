@@ -1,0 +1,35 @@
+From: Jess Sullivan <jess@jesssullivan.dev>
+Subject: [PATCH] drm: force non_desktop for Bigscreen Beyond VR headset
+
+Bigscreen Beyond 2e VR headsets report manufacturer "Bigscreen, Inc." in
+EDID but many kernels lack the EDID quirk (BIG/0x1234 → non_desktop=1).
+Without this property, compositors treat DP-2 as a regular monitor and
+won't offer it for DRM lease to VR runtimes like Monado.
+
+Detect "Bigscreen" in the parsed EDID manufacturer after parse_edid() and
+force non_desktop=true if the kernel didn't already set it.
+
+Tested on wlroots 0.18 + Sway 1.10 with RX 9070 XT on kernel 6.19.5.
+
+---
+ backend/drm/drm.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/backend/drm/drm.c b/backend/drm/drm.c
+index 4b918b7..237bb26 100644
+--- a/backend/drm/drm.c
++++ b/backend/drm/drm.c
+@@ -1677,6 +1677,12 @@ static bool connect_drm_connector(struct wlr_drm_connector *wlr_conn,
+ 	parse_edid(wlr_conn, edid_len, edid);
+ 	free(edid);
+
++	/* Bigscreen Beyond VR headset: force non_desktop if kernel lacks EDID quirk */
++	if (output->make && strstr(output->make, "Bigscreen") != NULL && !output->non_desktop) {
++		wlr_log(WLR_INFO, "Bigscreen Beyond detected, forcing non_desktop=true");
++		output->non_desktop = true;
++	}
++
+ 	char *subconnector = NULL;
+ 	if (wlr_conn->props.subconnector) {
+ 		subconnector = get_drm_prop_enum(drm->fd,
+--
