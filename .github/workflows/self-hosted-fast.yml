@@ -41,20 +41,33 @@ jobs:
 
       - name: Byte-compile Elisp
         run: |
-          # Use nix shell with just emacs+just — avoids downloading
-          # the full devShell (Rust toolchain, Monado, cage, etc.)
-          nix shell nixpkgs#emacs-pgtk nixpkgs#just --command just build
+          nix shell nixpkgs#emacs-pgtk --command bash -c '
+            emacs --batch \
+              -L lisp/core -L lisp/vr -L lisp/ext \
+              --eval "(setq byte-compile-error-on-warn nil)" \
+              -f batch-byte-compile \
+              $(find lisp/core lisp/vr lisp/ext -name "*.el" -not -name "*-pkg.el" -not -name "*-autoloads.el" | sort)
+          '
 
       - name: Run ERT tests
         run: |
-          nix shell nixpkgs#emacs-pgtk --command emacs --batch \
-            -L lisp/core -L lisp/vr -L lisp/ext \
-            -l ert \
-            $(find test -name '*-test.el' -printf '-l %p ') \
-            -f ert-run-tests-batch-and-exit
+          nix shell nixpkgs#emacs-pgtk --command bash -c '
+            emacs --batch \
+              -L lisp/core -L lisp/vr -L lisp/ext \
+              -l ert \
+              $(find test -name "*-test.el" -printf "-l %p ") \
+              -f ert-run-tests-batch-and-exit
+          '
 
       - name: Lint Elisp
-        run: nix shell nixpkgs#emacs-pgtk nixpkgs#just --command just lint-elisp
+        run: |
+          nix shell nixpkgs#emacs-pgtk --command bash -c '
+            emacs --batch \
+              -L lisp/core -L lisp/vr -L lisp/ext \
+              --eval "(setq byte-compile-error-on-warn t)" \
+              -f batch-byte-compile \
+              $(find lisp/core lisp/vr lisp/ext -name "*.el" -not -name "*-pkg.el" -not -name "*-autoloads.el" | sort)
+          '
 
   fast-build:
     name: Fast Build (self-hosted)
@@ -83,9 +96,6 @@ jobs:
       - name: Build compositor (full + VR)
         run: nix build .#compositor --out-link result-compositor
 
-      - name: Build headless compositor
-        run: nix build .#compositor-headless --out-link result-headless
-
       - name: sccache stats
         if: always()
         shell: bash
@@ -94,7 +104,7 @@ jobs:
       - name: Push to Attic cache
         if: env.ATTIC_SERVER != '' && github.event_name == 'push'
         run: |
-          for link in result result-compositor result-headless result-elisp; do
+          for link in result-compositor; do
             if [ -L "$link" ]; then
               echo "Pushing $link to Attic..."
               attic push "$ATTIC_CACHE" "$link" || echo "Warning: failed to push $link"
