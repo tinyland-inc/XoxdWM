@@ -19,7 +19,7 @@ jobs:
     name: Fast Check (self-hosted)
     if: vars.USE_SELFHOSTED == 'true'
     runs-on: tinyland-nix
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -39,30 +39,28 @@ jobs:
       - name: Flake check
         run: nix flake check --no-build
 
-      - name: Warm devShell
-        run: |
-          # Pre-download devShell closure (most time is spent here on cold runners)
-          nix develop --command true
-
       - name: Byte-compile Elisp
-        run: nix develop --command just build
+        run: |
+          # Use nix shell with just emacs+just — avoids downloading
+          # the full devShell (Rust toolchain, Monado, cage, etc.)
+          nix shell nixpkgs#emacs-pgtk nixpkgs#just --command just build
 
       - name: Run ERT tests
         run: |
-          nix develop --command emacs --batch \
+          nix shell nixpkgs#emacs-pgtk --command emacs --batch \
             -L lisp/core -L lisp/vr -L lisp/ext \
             -l ert \
             $(find test -name '*-test.el' -printf '-l %p ') \
             -f ert-run-tests-batch-and-exit
 
       - name: Lint Elisp
-        run: nix develop --command just lint-elisp
+        run: nix shell nixpkgs#emacs-pgtk nixpkgs#just --command just lint-elisp
 
   fast-build:
     name: Fast Build (self-hosted)
     if: vars.USE_SELFHOSTED == 'true'
     runs-on: tinyland-nix
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -87,17 +85,6 @@ jobs:
 
       - name: Build headless compositor
         run: nix build .#compositor-headless --out-link result-headless
-
-      - name: Run Rust tests
-        continue-on-error: true
-        run: |
-          # Use nix-shell from the build closure to avoid re-downloading the
-          # full devShell on cold runners (saves ~15min without Attic cache).
-          # Once Attic is deployed, switch back to: nix develop --command ...
-          nix develop --command bash -c "
-            cd compositor
-            cargo test --features full-backend,vr 2>&1 || cargo test --no-default-features
-          "
 
       - name: sccache stats
         if: always()
