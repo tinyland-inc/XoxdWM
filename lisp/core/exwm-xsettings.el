@@ -132,9 +132,13 @@ the default face's background color."
   (pcase theme
     ((cl-type string) theme)
     (`(,(cl-type string) . ,(cl-type string))
-     (if (color-dark-p
-          (color-name-to-rgb
-           (face-background 'default (exwm--find-x-frame))))
+     ;; The background color can be undefined for terminal Emacs. This only
+     ;; happens rarely, e.g., when switching themes from a terminal frame, from
+     ;; the same instance as EXWM.
+     (if (ignore-errors
+           (color-dark-p
+            (color-name-to-rgb
+             (face-background 'default (exwm--find-x-frame)))))
          (cdr theme) (car theme)))
     (_ (error "Expected theme to be a string or a pair of strings"))))
 
