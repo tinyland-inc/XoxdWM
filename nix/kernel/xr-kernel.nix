@@ -58,6 +58,22 @@ let
 
     # DRM lease support (Monado VR compositor)
     DRM = yes;
+
+    # SMI mitigation (from Dell T7810 BIOS A34 firmware RE)
+    HWLAT_TRACER = yes;         # in-kernel hardware latency tracer
+    TRACER_SNAPSHOT = yes;       # snapshot support for latency capture
+    X86_MSR = yes;               # /dev/msr for SMI_COUNT (MSR 0x34)
+    DELL_RBU = module;           # Dell Remote BIOS Update driver
+    ITCO_WDT = no;               # disable TCO watchdog (eliminates TCO_EN SMIs)
+
+    # BCI workload support (100:100 channel AD/DA, C777 wordclock)
+    CPU_ISOLATION = yes;         # isolcpus for dedicated BCI cores
+    NO_HZ_FULL = yes;            # tickless idle on isolated cores
+    HIGH_RES_TIMERS = yes;       # sub-ms timer resolution
+    RCU_NOCB_CPU = yes;          # offload RCU callbacks from isolated cores
+    IRQ_FORCED_THREADING = yes;  # force threaded IRQ handlers
+    UIO = yes;                   # userspace I/O for BCI devices
+    UIO_PCI_GENERIC = yes;
   };
 
   # RT preemption config (applied when enableRT = true)
