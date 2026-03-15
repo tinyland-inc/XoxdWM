@@ -599,46 +599,166 @@ bios-prepare-usb dev:
     echo "  4. Browse USB, select {{bios_exe}}"
     echo "  5. Click 'Begin Flash Update' (~2-3 min)"
 
-# Create FreeDOS bootable ISO with BIOS update (fallback method).
+# Create FreeDOS bootable USB for BIOS update (syslinux + memdisk).
+# Usage: just bios-create-freedos-usb /dev/sdX
+# Requires: syslinux, unzip (dnf install syslinux syslinux-nonlinux)
+# Creates a USB with three flash methods:
+#   1. FreeDOS boot → run T7810A34.EXE from DOS prompt
+#   2. Ctrl+Esc recovery → hold Ctrl+Esc at power-on → auto-flashes BIOS_IMG.rcv
+#   3. F12 BIOS Flash (if available on current BIOS revision)
 [group('bios')]
-bios-create-iso:
+bios-create-freedos-usb dev:
     #!/usr/bin/env bash
     set -euo pipefail
     [[ -f "{{bios_dir}}/{{bios_exe}}" ]] || { echo "Run 'just bios-download' first"; exit 1; }
-    FDOS_URL="https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/distributions/1.3/official/FD13-FloppyEdition.zip"
-    if [[ ! -f "{{bios_dir}}/fdboot.img" ]]; then
-        echo "Downloading FreeDOS floppy image..."
-        curl -fSL -o "/tmp/freedos-floppy.zip" "${FDOS_URL}"
-        unzip -o "/tmp/freedos-floppy.zip" "FLOPPY.img" -d "{{bios_dir}}/"
-        mv "{{bios_dir}}/FLOPPY.img" "{{bios_dir}}/fdboot.img"
-    fi
-    echo "Creating bootable ISO..."
-    mkdir -p "{{bios_dir}}/iso_staging"
-    cp "{{bios_dir}}/fdboot.img" "{{bios_dir}}/iso_staging/"
-    cp "{{bios_dir}}/{{bios_exe}}" "{{bios_dir}}/iso_staging/"
-    mkisofs -o "{{bios_dir}}/bios-update-t7810.iso" \
-        -b fdboot.img \
-        -no-emul-boot -boot-load-size 4 \
-        -V "BIOS_UPDATE_T7810" \
-        "{{bios_dir}}/iso_staging/"
-    rm -rf "{{bios_dir}}/iso_staging"
-    echo "ISO created: {{bios_dir}}/bios-update-t7810.iso"
-    ls -lh "{{bios_dir}}/bios-update-t7810.iso"
 
-# Write FreeDOS BIOS ISO to USB drive.
-# Usage: just bios-flash-usb /dev/sdX
-[group('bios')]
-bios-flash-usb dev:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    ISO="{{bios_dir}}/bios-update-t7810.iso"
-    [[ -f "${ISO}" ]] || { echo "Run 'just bios-create-iso' first"; exit 1; }
-    echo "WARNING: This will OVERWRITE ALL DATA on {{dev}}"
+    FDOS_URL="https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/distributions/1.3/official/FD13-FloppyEdition.zip"
+
+    # Download FreeDOS boot floppy if not cached
+    if [[ ! -f "{{bios_dir}}/freedos-boot.img" ]]; then
+        echo "Downloading FreeDOS 1.3 floppy image..."
+        curl -fSL -o "/tmp/freedos-floppy.zip" "${FDOS_URL}"
+        unzip -o "/tmp/freedos-floppy.zip" "144m/x86BOOT.img" -d "/tmp/"
+        mv "/tmp/144m/x86BOOT.img" "{{bios_dir}}/freedos-boot.img"
+        rm -rf "/tmp/144m"
+    fi
+
+    echo "WARNING: This will REPARTITION and FORMAT {{dev}}"
+    echo "Device:"
     lsblk "{{dev}}"
     read -p "Type YES to continue: " confirm
     [[ "$confirm" == "YES" ]] || { echo "Aborted."; exit 1; }
-    sudo dd if="${ISO}" of="{{dev}}" bs=4M status=progress conv=fsync
-    echo "USB ready. Boot honey from this USB to flash BIOS."
+
+    # Partition table + FAT32
+    sudo parted -s "{{dev}}" mklabel msdos
+    sudo parted -s "{{dev}}" mkpart primary fat32 1MiB 100%
+    sudo parted -s "{{dev}}" set 1 boot on
+    sleep 1  # wait for partition to appear
+    sudo mkfs.vfat -F 32 -n BIOSFLASH "{{dev}}1"
+
+    # Install syslinux MBR + bootloader
+    sudo dd if=/usr/share/syslinux/mbr.bin of="{{dev}}" bs=440 count=1 conv=notrunc
+    sudo syslinux --install "{{dev}}1"
+
+    # Mount and populate
+    MNT=$(mktemp -d)
+    sudo mount "{{dev}}1" "${MNT}"
+
+    # Syslinux memdisk (boots floppy images from USB)
+    sudo cp /usr/share/syslinux/memdisk "${MNT}/"
+
+    # FreeDOS boot floppy
+    sudo cp "{{bios_dir}}/freedos-boot.img" "${MNT}/"
+
+    # Dell BIOS update exe (for FreeDOS and F12 methods)
+    sudo cp "{{bios_dir}}/{{bios_exe}}" "${MNT}/"
+
+    # Dell recovery file (for Ctrl+Esc method)
+    sudo cp "{{bios_dir}}/{{bios_exe}}" "${MNT}/BIOS_IMG.rcv"
+
+    # Syslinux boot menu
+    sudo tee "${MNT}/syslinux.cfg" > /dev/null << 'SYSEOF'
+    DEFAULT freedos
+    PROMPT 1
+    TIMEOUT 50
+
+    LABEL freedos
+      MENU LABEL Boot FreeDOS (Dell BIOS Update)
+      KERNEL memdisk
+      APPEND initrd=freedos-boot.img
+
+    LABEL local
+      MENU LABEL Boot from hard drive
+      LOCALBOOT 0x80
+    SYSEOF
+
+    sudo sync
+    echo ""
+    echo "=== FreeDOS BIOS Update USB Ready ==="
+    ls -lh "${MNT}/"
+    sudo umount "${MNT}"
+    rmdir "${MNT}"
+
+    echo ""
+    echo "Flash methods (try in order):"
+    echo "  1. FreeDOS:  F12 → USB Storage → syslinux → FreeDOS boots"
+    echo "               At A:\\> prompt, switch to C: and run T7810A34.EXE"
+    echo "  2. Ctrl+Esc: Power off → hold Ctrl+Esc → power on"
+    echo "               Auto-flashes BIOS_IMG.rcv (~2-3 min)"
+    echo "  3. F12 BIOS Flash: F12 → BIOS Flash Update → T7810A34.exe"
+    echo "               (only available if current BIOS supports it)"
+
+# Create FreeDOS bootable USB on a remote host.
+# Usage: just bios-create-freedos-usb-remote honey /dev/sdc
+[group('bios')]
+bios-create-freedos-usb-remote host dev:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Creating FreeDOS BIOS USB on {{host}} ({{dev}}) ==="
+    [[ -f "{{bios_dir}}/{{bios_exe}}" ]] || { echo "Run 'just bios-download' first"; exit 1; }
+
+    # Copy BIOS exe to remote
+    scp "{{bios_dir}}/{{bios_exe}}" jess@{{host}}:/tmp/
+
+    ssh jess@{{host}} "echo 'tinyland' | sudo -S bash -c '
+    set -euo pipefail
+    FDOS_URL=\"https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/distributions/1.3/official/FD13-FloppyEdition.zip\"
+
+    # Install tools
+    dnf install -y syslinux syslinux-nonlinux unzip 2>&1 | tail -3
+
+    # Download FreeDOS
+    if [[ ! -f /tmp/freedos-boot.img ]]; then
+        curl -fSL -o /tmp/freedos-floppy.zip \"\${FDOS_URL}\"
+        cd /tmp && unzip -o freedos-floppy.zip 144m/x86BOOT.img
+        mv 144m/x86BOOT.img freedos-boot.img
+        rm -rf 144m
+    fi
+
+    # Unmount
+    umount {{dev}}1 2>/dev/null || true
+
+    # Partition + format
+    parted -s {{dev}} mklabel msdos
+    parted -s {{dev}} mkpart primary fat32 1MiB 100%
+    parted -s {{dev}} set 1 boot on
+    sleep 1
+    mkfs.vfat -F 32 -n BIOSFLASH {{dev}}1
+
+    # Install syslinux
+    dd if=/usr/share/syslinux/mbr.bin of={{dev}} bs=440 count=1 conv=notrunc
+    syslinux --install {{dev}}1
+
+    # Populate
+    mkdir -p /tmp/bios-usb
+    mount {{dev}}1 /tmp/bios-usb
+    cp /usr/share/syslinux/memdisk /tmp/bios-usb/
+    cp /tmp/freedos-boot.img /tmp/bios-usb/
+    cp /tmp/T7810A34.exe /tmp/bios-usb/
+    cp /tmp/T7810A34.exe /tmp/bios-usb/BIOS_IMG.rcv
+
+    cat > /tmp/bios-usb/syslinux.cfg << SYSEOF
+    DEFAULT freedos
+    PROMPT 1
+    TIMEOUT 50
+    LABEL freedos
+      MENU LABEL Boot FreeDOS (Dell BIOS Update)
+      KERNEL memdisk
+      APPEND initrd=freedos-boot.img
+    LABEL local
+      MENU LABEL Boot from hard drive
+      LOCALBOOT 0x80
+    SYSEOF
+
+    sync
+    echo \"=== USB Ready ===\"
+    ls -lh /tmp/bios-usb/
+    umount /tmp/bios-usb
+    rmdir /tmp/bios-usb
+    '"
+    echo ""
+    echo "FreeDOS BIOS USB ready on {{host}} at {{dev}}"
+    echo "Flash: power off → F12 → USB Storage → FreeDOS → C:\\T7810A34.EXE"
 
 # Extract firmware payload from Dell BIOS exe for analysis.
 [group('bios')]
