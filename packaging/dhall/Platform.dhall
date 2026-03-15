@@ -113,6 +113,9 @@ let haswellEP
       , microcodeFixBios = "A34"
       }
 
+let NUMANode =
+      { cpus : Text, ramMiB : Natural, distanceSelf : Natural, distanceCross : Natural }
+
 let dellT7810
     : Platform
     = { name = "honey"
@@ -128,6 +131,16 @@ let dellT7810
       , gpu = "AMD Radeon RX 9070 XT (Navi 48 / RDNA4)"
       , firmwareModules =
           { total = 497, dxeDrivers = 270, smmHandlers = 153, peiModules = 72 }
+      , numa =
+          [ { cpus = "0-7,16-23", ramMiB = 131709, distanceSelf = 10, distanceCross = 21 }
+          , { cpus = "8-15,24-31", ramMiB = 98514, distanceSelf = 10, distanceCross = 21 }
+          ]
+      , smiBaseline =
+          { worstCaseUs = 2523
+          , periodicRateHz = 1.0
+          , totalFromBoot = 9959
+          , biosVersion = "A02"
+          }
       }
 
 in  { Platform, PCH, CPU, SMISource, dellT7810, wellsburg, haswellEP }
