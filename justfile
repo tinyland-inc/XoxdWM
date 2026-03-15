@@ -382,6 +382,26 @@ clean:
 changelog:
     git-cliff --output "{{project_root}}/CHANGELOG.md"
 
+# ── analysis (Chapel) ──────────────────────────────
+
+[group('analysis')]
+chapel-build:
+    cd "{{project_root}}/analysis" && mason build
+
+[group('analysis')]
+chapel-test *args="--numTests=500":
+    cd "{{project_root}}/analysis" && mason test -- {{args}}
+
+[group('analysis')]
+chapel-demo:
+    cd "{{project_root}}/analysis" && chpl examples/DualSocketDemo.chpl -o /tmp/numa-demo
+    @echo "Run on honey: just chapel-numa-demo honey"
+
+[group('analysis')]
+chapel-numa-demo host="honey":
+    scp "{{project_root}}/analysis/examples/DualSocketDemo.chpl" jess@{{host}}:/tmp/
+    ssh jess@{{host}} "chpl /tmp/DualSocketDemo.chpl -o /tmp/numa-demo && /tmp/numa-demo --numChannels=100"
+
 [group('dev')]
 changelog-unreleased:
     git-cliff --unreleased

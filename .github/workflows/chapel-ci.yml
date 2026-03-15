@@ -1,0 +1,46 @@
+name: Chapel Analysis Tests
+
+on:
+  push:
+    paths:
+      - 'analysis/**'
+  pull_request:
+    paths:
+      - 'analysis/**'
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    container: chapel/chapel:2.8.0
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Mason dependencies
+        working-directory: analysis
+        run: |
+          mason external --setup
+          mason add quickchpl@1.0.2 || true
+
+      - name: Build
+        working-directory: analysis
+        run: mason build
+
+      - name: Run property tests
+        working-directory: analysis
+        run: mason test -- --numTests=500
+
+      - name: Build examples
+        working-directory: analysis
+        run: |
+          for f in examples/*.chpl; do
+            echo "Building $f..."
+            chpl "$f" -M src -o "/tmp/$(basename $f .chpl)"
+          done
+
+      - name: Lint
+        working-directory: analysis
+        run: |
+          chplcheck src/**/*.chpl 2>&1 || true

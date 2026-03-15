@@ -283,6 +283,9 @@
               inherit pkgs;
             };
 
+            # Chapel 2.8 — parallel programming language for BCI analysis
+            chapel = import ./nix/packages/chapel.nix { inherit pkgs; inherit (pkgs) lib stdenv fetchurl python3 llvmPackages_18 gmp which perl bash cmake; };
+
             # Patched wlroots 0.18 — Bigscreen Beyond non_desktop detection
             wlroots-beyond = import ./nix/packages/wlroots-beyond.nix { inherit pkgs; };
 
@@ -310,6 +313,22 @@
             packages.wlroots-beyond = wlroots-beyond;
             packages.sway-beyond = sway-beyond;
             packages.monado-beyond = monado-beyond;
+
+            # Chapel 2.8 compiler + runtime for BCI batch analysis
+            packages.chapel = chapel;
+
+            # Chapel development shell with Mason package manager
+            devShells.chapel-dev = pkgs.mkShell {
+              buildInputs = [ chapel ];
+              shellHook = ''
+                echo "Chapel dev shell ready"
+                echo "  chpl: $(chpl --version 2>/dev/null || echo 'in PATH')"
+                echo "  mason: $(mason --version 2>/dev/null || echo 'available')"
+                echo ""
+                echo "Build: cd analysis && mason build"
+                echo "Test:  cd analysis && mason test"
+              '';
+            };
           }
           ))
           (pkgs.lib.optionalAttrs (system == "x86_64-linux") {
