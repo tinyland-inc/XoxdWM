@@ -320,8 +320,41 @@ beyond-kernel-install host tag variant="generic":
     gh release download "{{tag}}" -R "{{linux_xr_repo}}" \
         -p "${PATTERN}" -D /tmp/kernel-xr-rpms/ --clobber
     scp /tmp/kernel-xr-rpms/*.rpm jess@{{host}}:/tmp/
-    ssh jess@{{host}} "sudo dnf install -y /tmp/kernel-xr*.x86_64.rpm"
-    echo "Installed. Reboot {{host}} to activate."
+    ssh jess@{{host}} "echo 'tinyland' | sudo -S bash -c '
+    set -euo pipefail
+    echo \">>> Installing RPM...\"
+    dnf install -y /tmp/kernel-xr*.x86_64.rpm 2>&1 | tail -5
+
+    # Find the installed kernel version
+    KREL=\$(ls /lib/modules/ | grep xr.el10 | sort -V | tail -1)
+    echo \">>> Kernel version: \${KREL}\"
+
+    # Generate initramfs if missing (RPM %post does not always do this)
+    if [[ ! -f /boot/initramfs-\${KREL}.img ]]; then
+        echo \">>> Generating initramfs...\"
+        dracut --force /boot/initramfs-\${KREL}.img \${KREL}
+    else
+        echo \">>> initramfs exists: /boot/initramfs-\${KREL}.img\"
+    fi
+
+    # Verify grub entry exists
+    if grubby --info /boot/vmlinuz-\${KREL} >/dev/null 2>&1; then
+        echo \">>> Grub entry found\"
+        grubby --set-default /boot/vmlinuz-\${KREL}
+    else
+        echo \">>> Creating grub entry...\"
+        # Get boot args from current default kernel
+        CURRENT_ARGS=\$(grubby --info=DEFAULT | grep ^args= | sed \"s/^args=//;s/^\\\"\(.*\)\\\"$/\1/\")
+        grubby --add-kernel=/boot/vmlinuz-\${KREL} \
+            --initrd=/boot/initramfs-\${KREL}.img \
+            --title=\"XR Kernel (\${KREL})\" \
+            --args=\"\${CURRENT_ARGS}\"
+        grubby --set-default /boot/vmlinuz-\${KREL}
+    fi
+
+    echo \">>> Default kernel: \$(grubby --default-kernel)\"
+    echo \">>> Done. Reboot to activate.\"
+    '"
 
 # Trigger linux-xr CI rebuild (when patches change).
 # Variant: both (default), rt, generic
