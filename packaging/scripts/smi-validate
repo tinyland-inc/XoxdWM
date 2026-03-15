@@ -1,0 +1,145 @@
+#!/bin/bash
+# smi-validate — Characterize SMI latency on Dell T7810 (C610/Wellsburg PCH)
+#
+# Based on firmware RE analysis of T7810A34.exe:
+#   - ACPI_BASE = 0x0400
+#   - SMI_EN at port 0x0430 (controls which SMI sources are active)
+#   - SMI_STS at port 0x0434 (shows which SMIs have fired)
+#
+# Usage: sudo ./smi-validate [--full]
+# Requires: msr-tools, hwlat_detector (kernel config), rt-tests
+set -euo pipefail
+
+RED='\033[0;31m'
+GRN='\033[0;32m'
+YEL='\033[0;33m'
+NC='\033[0m'
+
+ok()   { echo -e "  ${GRN}✓${NC} $1"; }
+warn() { echo -e "  ${YEL}!${NC} $1"; }
+fail() { echo -e "  ${RED}✗${NC} $1"; }
+
+echo "═══════════════════════════════════════════════════════════════"
+echo " Dell T7810 SMI Validation (C610/Wellsburg PCH)"
+echo " Based on firmware RE of BIOS A34 (153 SMM handlers analyzed)"
+echo "═══════════════════════════════════════════════════════════════"
+
+# ── BIOS version ──
+echo ""
+echo "── BIOS ──"
+BIOS_VER=$(cat /sys/class/dmi/id/bios_version 2>/dev/null || echo "unknown")
+BIOS_DATE=$(cat /sys/class/dmi/id/bios_date 2>/dev/null || echo "unknown")
+if [ "$BIOS_VER" = "A34" ]; then
+    ok "BIOS version: $BIOS_VER ($BIOS_DATE)"
+elif [ "$BIOS_VER" = "A02" ]; then
+    fail "BIOS version: $BIOS_VER ($BIOS_DATE) — A34 REQUIRED for RT"
+    fail "  TSC-deadline errata unfixed, SMI behavior unpatched"
+    fail "  Flash BIOS: just bios-prepare-usb /dev/sdX → F12 at boot"
+else
+    warn "BIOS version: $BIOS_VER ($BIOS_DATE) — A34 recommended"
+fi
+
+# ── Kernel ──
+echo ""
+echo "── Kernel ──"
+echo "  uname -r: $(uname -r)"
+if zcat /proc/config.gz 2>/dev/null | grep -q "CONFIG_PREEMPT_RT=y"; then
+    ok "PREEMPT_RT: enabled"
+elif grep -q "CONFIG_PREEMPT_RT=y" /boot/config-$(uname -r) 2>/dev/null; then
+    ok "PREEMPT_RT: enabled"
+else
+    warn "PREEMPT_RT: not enabled — using standard preemption"
+fi
+
+# Check HZ
+if zcat /proc/config.gz 2>/dev/null | grep -q "CONFIG_HZ=1000"; then
+    ok "CONFIG_HZ=1000 (1ms tick)"
+else
+    warn "CONFIG_HZ != 1000"
+fi
+
+# ── Clocksource ──
+echo ""
+echo "── Clocksource ──"
+CS=$(cat /sys/devices/system/clocksource/clocksource0/current_clocksource)
+AVAIL=$(cat /sys/devices/system/clocksource/clocksource0/available_clocksource)
+if [ "$CS" = "tsc" ]; then
+    ok "Current: $CS (optimal — 20ns access)"
+elif [ "$CS" = "hpet" ]; then
+    warn "Current: $CS (1us access — add clocksource=tsc to boot params)"
+else
+    fail "Current: $CS (unexpected)"
+fi
+echo "  Available: $AVAIL"
+
+# ── SMI Count ──
+echo ""
+echo "── SMI Activity ──"
+if command -v rdmsr &>/dev/null; then
+    SMI_BEFORE=$(rdmsr -p 0 0x34 2>/dev/null || echo "error")
+    if [ "$SMI_BEFORE" != "error" ]; then
+        echo "  Measuring SMI rate over 10 seconds..."
+        sleep 10
+        SMI_AFTER=$(rdmsr -p 0 0x34 2>/dev/null || echo "error")
+        if [ "$SMI_AFTER" != "error" ]; then
+            SMI_DELTA=$((16#$SMI_AFTER - 16#$SMI_BEFORE))
+            SMI_RATE=$(echo "scale=1; $SMI_DELTA / 10" | bc)
+            if [ "$SMI_DELTA" -eq 0 ]; then
+                ok "SMI count: 0 in 10s (no SMI activity — excellent)"
+            elif [ "$SMI_DELTA" -lt 10 ]; then
+                warn "SMI count: $SMI_DELTA in 10s ($SMI_RATE/s) — acceptable"
+            else
+                fail "SMI count: $SMI_DELTA in 10s ($SMI_RATE/s) — SMI storm detected"
+                fail "  Disable USB Legacy Support in BIOS (F2 → Advanced → USB)"
+            fi
+        fi
+    else
+        warn "Cannot read MSR 0x34 (SMI_COUNT) — load msr module: modprobe msr"
+    fi
+else
+    warn "rdmsr not available — install msr-tools: dnf install msr-tools"
+fi
+
+# ── Hardware Latency ──
+echo ""
+echo "── Hardware Latency ──"
+if command -v hwlatdetect &>/dev/null; then
+    if [ "${1:-}" = "--full" ]; then
+        echo "  Running hwlatdetect for 60s (full mode)..."
+        hwlatdetect --duration=60 --threshold=10 2>&1 | while IFS= read -r line; do
+            echo "  $line"
+        done
+    else
+        echo "  Running hwlatdetect for 10s (quick mode, use --full for 60s)..."
+        hwlatdetect --duration=10 --threshold=10 2>&1 | while IFS= read -r line; do
+            echo "  $line"
+        done
+    fi
+else
+    warn "hwlatdetect not available — install rt-tests: dnf install rt-tests"
+fi
+
+# ── CPU Isolation ──
+echo ""
+echo "── CPU Isolation ──"
+ISOL=$(cat /sys/devices/system/cpu/isolated 2>/dev/null || echo "none")
+NOHZ=$(cat /proc/cmdline | grep -oP 'nohz_full=\S+' || echo "not set")
+if [ "$ISOL" != "none" ] && [ "$ISOL" != "" ]; then
+    ok "Isolated cores: $ISOL"
+else
+    warn "No isolated cores (add isolcpus=2-7 to boot params for BCI)"
+fi
+echo "  nohz_full: $NOHZ"
+
+# ── Summary ──
+echo ""
+echo "═══════════════════════════════════════════════════════════════"
+echo " SMI Mitigation Checklist (from firmware RE):"
+echo "  [ ] BIOS A34 flashed (F12 boot menu or FreeDOS)"
+echo "  [ ] USB Legacy Support disabled in BIOS (F2 setup)"
+echo "  [ ] Intel AMT disabled in BIOS"
+echo "  [ ] Computrace disabled in BIOS"
+echo "  [ ] C-States limited to C1 in BIOS"
+echo "  [ ] tuned profile 'xr-bci' active"
+echo "  [ ] hwlatdetect shows < 10us max latency"
+echo "═══════════════════════════════════════════════════════════════"

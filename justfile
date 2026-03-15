@@ -648,3 +648,21 @@ bios-verify host="honey":
     set -euo pipefail
     echo "=== BIOS version on {{host}} ==="
     ssh jess@{{host}} "sudo dmidecode -t bios | grep -E 'Vendor|Version|Release|Revision|Date'"
+
+# Deploy tuned profile for BCI/VR workloads to remote host.
+[group('bios')]
+bios-tuned-deploy host="honey":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Deploying xr-bci tuned profile to {{host}} ==="
+    scp -r "{{project_root}}/packaging/tuned/xr-bci" jess@{{host}}:/tmp/
+    ssh jess@{{host}} "echo 'tinyland' | sudo -S bash -c 'cp -r /tmp/xr-bci /etc/tuned/ && tuned-adm profile xr-bci && echo Done: && tuned-adm active'"
+
+# Run SMI validation on remote host (characterize hardware latency).
+[group('bios')]
+smi-validate host="honey" *args="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== SMI Validation on {{host}} ==="
+    scp "{{project_root}}/packaging/scripts/smi-validate" jess@{{host}}:/tmp/
+    ssh jess@{{host}} "chmod +x /tmp/smi-validate && echo 'tinyland' | sudo -S /tmp/smi-validate {{args}}"
