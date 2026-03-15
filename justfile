@@ -304,25 +304,34 @@ deploy-verify host="honey":
 linux_xr_repo := "Jesssullivan/linux-xr"
 
 # Download + install latest XR kernel RPM on remote host.
-# Usage: just beyond-kernel-install honey v6.19.5-xr1
+# Usage: just beyond-kernel-install honey v6.19.5-xr3          (generic)
+#        just beyond-kernel-install honey v6.19.5-xr3 rt       (RT)
 [group('vr')]
-beyond-kernel-install host tag:
+beyond-kernel-install host tag variant="generic":
     #!/usr/bin/env bash
     set -euo pipefail
-    echo "=== Installing kernel-xr {{tag}} on {{host}} ==="
+    echo "=== Installing kernel-xr ({{variant}}) {{tag}} on {{host}} ==="
+    rm -rf /tmp/kernel-xr-rpms && mkdir -p /tmp/kernel-xr-rpms
+    case "{{variant}}" in
+        rt)      PATTERN="kernel-xr-rt-*.x86_64.rpm" ;;
+        generic) PATTERN="kernel-xr-[0-9]*.x86_64.rpm" ;;
+        *)       echo "Unknown variant: {{variant}} (use rt or generic)"; exit 1 ;;
+    esac
     gh release download "{{tag}}" -R "{{linux_xr_repo}}" \
-        -p "kernel-xr-*.x86_64.rpm" -D /tmp/kernel-xr-rpms/ --clobber
-    scp /tmp/kernel-xr-rpms/kernel-xr-*.x86_64.rpm jess@{{host}}:/tmp/
-    ssh jess@{{host}} "sudo dnf install -y /tmp/kernel-xr-*.x86_64.rpm"
+        -p "${PATTERN}" -D /tmp/kernel-xr-rpms/ --clobber
+    scp /tmp/kernel-xr-rpms/*.rpm jess@{{host}}:/tmp/
+    ssh jess@{{host}} "sudo dnf install -y /tmp/kernel-xr*.x86_64.rpm"
     echo "Installed. Reboot {{host}} to activate."
 
 # Trigger linux-xr CI rebuild (when patches change).
+# Variant: both (default), rt, generic
 [group('vr')]
-beyond-kernel-trigger kversion="6.19.5" xr_release="1" rt_version="6.19.3-rt1":
+beyond-kernel-trigger kversion="6.19.5" xr_release="1" rt_version="6.19.3-rt1" variant="both":
     gh workflow run build-kernel.yml -R "{{linux_xr_repo}}" \
         -f kernel_version="{{kversion}}" \
         -f xr_release="{{xr_release}}" \
-        -f rt_version="{{rt_version}}"
+        -f rt_version="{{rt_version}}" \
+        -f variant="{{variant}}"
     @echo "Triggered. Watch: gh run list -R {{linux_xr_repo}}"
 
 # Verify XR kernel install on remote host.
@@ -520,3 +529,122 @@ selinux-clean:
     @echo "Cleaning SELinux build artifacts..."
     rm -f "{{selinux_dir}}"/*.pp "{{selinux_dir}}"/*.mod "{{selinux_dir}}"/*.mod.fc
     rm -rf "{{selinux_dir}}/tmp"
+
+# ── bios (Dell T7810) ──────────────────────────────
+
+bios_dir := project_root + "/packaging/bios"
+bios_exe := "T7810A34.exe"
+bios_url := "https://dl.dell.com/FOLDER06768042M/1/T7810A34.exe"
+
+# Download Dell T7810 BIOS A34 update executable.
+[group('bios')]
+bios-download:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{bios_dir}}"
+    if [[ -f "{{bios_dir}}/{{bios_exe}}" ]]; then
+        echo "BIOS file already downloaded: {{bios_dir}}/{{bios_exe}}"
+        ls -lh "{{bios_dir}}/{{bios_exe}}"
+    else
+        echo "Downloading Dell T7810 BIOS A34..."
+        curl -fSL -o "{{bios_dir}}/{{bios_exe}}" "{{bios_url}}"
+        echo "Downloaded: {{bios_dir}}/{{bios_exe}}"
+        ls -lh "{{bios_dir}}/{{bios_exe}}"
+    fi
+
+# Prepare FAT32 USB for F12 Boot Menu BIOS flash (primary method).
+# Usage: just bios-prepare-usb /dev/sdX
+# The T7810 supports F12 > "BIOS Flash Update" — no FreeDOS needed.
+[group('bios')]
+bios-prepare-usb dev:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [[ -f "{{bios_dir}}/{{bios_exe}}" ]] || { echo "Run 'just bios-download' first"; exit 1; }
+    echo "WARNING: This will FORMAT {{dev}}1 as FAT32."
+    echo "Device:"
+    lsblk "{{dev}}"
+    read -p "Type YES to continue: " confirm
+    [[ "$confirm" == "YES" ]] || { echo "Aborted."; exit 1; }
+    sudo mkfs.vfat -F 32 -n BIOS "{{dev}}1"
+    MNT=$(mktemp -d)
+    sudo mount "{{dev}}1" "${MNT}"
+    sudo cp "{{bios_dir}}/{{bios_exe}}" "${MNT}/"
+    sudo umount "${MNT}"
+    rmdir "${MNT}"
+    echo ""
+    echo "USB ready. Flash procedure:"
+    echo "  1. Insert USB into honey"
+    echo "  2. Power on, press F12 at Dell logo"
+    echo "  3. Select 'BIOS Flash Update'"
+    echo "  4. Browse USB, select {{bios_exe}}"
+    echo "  5. Click 'Begin Flash Update' (~2-3 min)"
+
+# Create FreeDOS bootable ISO with BIOS update (fallback method).
+[group('bios')]
+bios-create-iso:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [[ -f "{{bios_dir}}/{{bios_exe}}" ]] || { echo "Run 'just bios-download' first"; exit 1; }
+    FDOS_URL="https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/distributions/1.3/official/FD13-FloppyEdition.zip"
+    if [[ ! -f "{{bios_dir}}/fdboot.img" ]]; then
+        echo "Downloading FreeDOS floppy image..."
+        curl -fSL -o "/tmp/freedos-floppy.zip" "${FDOS_URL}"
+        unzip -o "/tmp/freedos-floppy.zip" "FLOPPY.img" -d "{{bios_dir}}/"
+        mv "{{bios_dir}}/FLOPPY.img" "{{bios_dir}}/fdboot.img"
+    fi
+    echo "Creating bootable ISO..."
+    mkdir -p "{{bios_dir}}/iso_staging"
+    cp "{{bios_dir}}/fdboot.img" "{{bios_dir}}/iso_staging/"
+    cp "{{bios_dir}}/{{bios_exe}}" "{{bios_dir}}/iso_staging/"
+    mkisofs -o "{{bios_dir}}/bios-update-t7810.iso" \
+        -b fdboot.img \
+        -no-emul-boot -boot-load-size 4 \
+        -V "BIOS_UPDATE_T7810" \
+        "{{bios_dir}}/iso_staging/"
+    rm -rf "{{bios_dir}}/iso_staging"
+    echo "ISO created: {{bios_dir}}/bios-update-t7810.iso"
+    ls -lh "{{bios_dir}}/bios-update-t7810.iso"
+
+# Write FreeDOS BIOS ISO to USB drive.
+# Usage: just bios-flash-usb /dev/sdX
+[group('bios')]
+bios-flash-usb dev:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ISO="{{bios_dir}}/bios-update-t7810.iso"
+    [[ -f "${ISO}" ]] || { echo "Run 'just bios-create-iso' first"; exit 1; }
+    echo "WARNING: This will OVERWRITE ALL DATA on {{dev}}"
+    lsblk "{{dev}}"
+    read -p "Type YES to continue: " confirm
+    [[ "$confirm" == "YES" ]] || { echo "Aborted."; exit 1; }
+    sudo dd if="${ISO}" of="{{dev}}" bs=4M status=progress conv=fsync
+    echo "USB ready. Boot honey from this USB to flash BIOS."
+
+# Extract firmware payload from Dell BIOS exe for analysis.
+[group('bios')]
+bios-extract:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [[ -f "{{bios_dir}}/{{bios_exe}}" ]] || { echo "Run 'just bios-download' first"; exit 1; }
+    mkdir -p "{{bios_dir}}/extracted"
+    echo "Attempting extraction with 7z..."
+    if command -v 7z &>/dev/null; then
+        7z x -o"{{bios_dir}}/extracted" "{{bios_dir}}/{{bios_exe}}" -y || true
+    fi
+    echo "Attempting extraction with BIOSUtilities..."
+    if python3 -c "import biosutilities" 2>/dev/null; then
+        python3 -m biosutilities.Dell_PFS_Extract "{{bios_dir}}/{{bios_exe}}" \
+            -o "{{bios_dir}}/extracted/" || true
+    else
+        echo "  BIOSUtilities not installed. Install: pip install biosutilities"
+    fi
+    echo "Extracted to: {{bios_dir}}/extracted/"
+    ls -la "{{bios_dir}}/extracted/" 2>/dev/null || echo "  (empty)"
+
+# Check BIOS version on remote host.
+[group('bios')]
+bios-verify host="honey":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== BIOS version on {{host}} ==="
+    ssh jess@{{host}} "sudo dmidecode -t bios | grep -E 'Vendor|Version|Release|Revision|Date'"

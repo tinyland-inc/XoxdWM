@@ -28,5 +28,8 @@ CHANGELOG.md
 # Test caches
 .hypothesis/
 
+# BIOS update binaries
+packaging/bios/
+
 # Claude / AI working state
 .claude/

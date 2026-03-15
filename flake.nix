@@ -202,6 +202,29 @@
             '';
           };
 
+          # BIOS analysis shell — Ghidra, UEFITool, binwalk for Dell firmware RE
+          devShells.bios-tools = pkgs.mkShell {
+            buildInputs = with pkgs; [
+              uefitool
+              binwalk
+              p7zip
+            ] ++ lib.optionals stdenv.isLinux [
+              ghidra
+            ];
+            shellHook = ''
+              echo "BIOS analysis shell ready"
+              echo "  uefitool: available"
+              echo "  binwalk: $(binwalk --version 2>/dev/null | head -1)"
+              echo "  7z: $(7z 2>&1 | head -2 | tail -1)"
+              echo ""
+              echo "Workflow:"
+              echo "  1. just bios-download"
+              echo "  2. just bios-extract"
+              echo "  3. uefitool packaging/bios/extracted/*.bin"
+              echo "  4. ghidra  # import extracted UEFI modules"
+            '';
+          };
+
           # Full compositor with VR support
           packages.compositor = mkCompositor {
             pname = "ewwm-compositor";
