@@ -53,6 +53,14 @@ let smiMitigationConfig =
       , enable "CONFIG_X86_TSC"
         -- Disable iTCO_wdt (Intel TCO Watchdog Timer)
       , disable "CONFIG_ITCO_WDT"
+        -- Enable hwlat tracer for SMI characterization
+      , enable "CONFIG_HWLAT_TRACER"
+        -- Enable MSR access for SMI_COUNT (MSR 0x34) reading
+      , enable "CONFIG_X86_MSR"
+        -- Enable Dell Remote BIOS Update driver (Linux-native BIOS updates)
+      , enable "CONFIG_DELL_RBU"
+        -- Enable tracer snapshot for latency capture
+      , enable "CONFIG_TRACER_SNAPSHOT"
       ]
 
 let bciConfig =

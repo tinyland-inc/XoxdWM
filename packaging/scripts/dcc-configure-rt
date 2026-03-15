@@ -1,0 +1,77 @@
+#!/bin/bash
+# dcc-configure-rt — Configure Dell T7810 BIOS for PREEMPT_RT via Dell Command | Configure
+#
+# Uses cctk (Dell Command | Configure CLI) to set BIOS options that eliminate
+# SMI sources identified via firmware RE of BIOS A34.
+#
+# Prerequisites:
+#   sudo dnf install srvadmin-hapi command-configure
+#   (Download from Dell Support: Dell Command | Configure for Linux)
+#
+# Usage: sudo ./dcc-configure-rt [--apply | --check | --export]
+set -euo pipefail
+
+CCTK="/opt/dell/dcc/cctk"
+
+if [ ! -x "$CCTK" ]; then
+    echo "ERROR: Dell Command | Configure not installed."
+    echo "Download from: https://www.dell.com/support/kbdoc/en-us/000178000/dell-command-configure"
+    echo "Install: sudo rpm -ivh srvadmin-hapi-*.rpm command-configure-*.rpm"
+    exit 1
+fi
+
+check_setting() {
+    local setting="$1"
+    local expected="$2"
+    local current
+    current=$($CCTK --$setting 2>/dev/null | grep -oP '=\K.*' || echo "error")
+    if [ "$current" = "$expected" ]; then
+        echo "  ✓ $setting = $current"
+    else
+        echo "  ✗ $setting = $current (expected: $expected)"
+    fi
+}
+
+case "${1:---check}" in
+    --check)
+        echo "=== Dell T7810 BIOS Settings for RT ==="
+        echo "(checking via Dell Command | Configure)"
+        echo ""
+        check_setting "usblegacy" "disabled"
+        check_setting "cstates" "c1"
+        check_setting "intelturboboosten" "disabled"
+        check_setting "intelspdstep" "disabled"
+        check_setting "hpet" "enabled"
+        check_setting "computrace" "deactivate"
+        echo ""
+        echo "Run with --apply to set these values."
+        ;;
+    --apply)
+        echo "=== Applying RT-optimal BIOS settings ==="
+        echo ""
+        echo "Disabling USB Legacy Support (eliminates LEGACY_USB_EN/USB2_EN SMIs)..."
+        $CCTK --usblegacy=disabled || echo "  (may require reboot)"
+        echo "Limiting C-States to C1 (eliminates APIC wakeup latency)..."
+        $CCTK --cstates=c1 || echo "  (may require reboot)"
+        echo "Disabling Intel Turbo Boost (stabilizes TSC)..."
+        $CCTK --intelturboboosten=disabled || true
+        echo "Disabling Intel SpeedStep (prevents P-state SMI routing)..."
+        $CCTK --intelspdstep=disabled || true
+        echo "Enabling HPET (fallback clocksource)..."
+        $CCTK --hpet=enabled || true
+        echo "Deactivating Computrace (eliminates anti-theft SMIs)..."
+        $CCTK --computrace=deactivate || true
+        echo ""
+        echo "Done. Reboot required for changes to take effect."
+        echo "After reboot, verify: sudo ./dcc-configure-rt --check"
+        ;;
+    --export)
+        echo "=== Exporting current BIOS settings ==="
+        $CCTK --outfile=/tmp/t7810-bios-settings.cctk
+        echo "Exported to /tmp/t7810-bios-settings.cctk"
+        ;;
+    *)
+        echo "Usage: $0 [--check | --apply | --export]"
+        exit 1
+        ;;
+esac
