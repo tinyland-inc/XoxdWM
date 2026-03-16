@@ -217,10 +217,26 @@ phase1() {
     ok "Root filesystem extended"
 
     echo ""
-    echo "── Step 1.7: Rebuild initramfs (NVMe modules) ──"
-    info "Ensuring NVMe modules are in initramfs..."
-    run_cmd dracut --force
-    ok "initramfs rebuilt"
+    echo "── Step 1.7: Rebuild ALL kernel initramfs (NVMe modules) ──"
+    info "Root moved to NVMe — all initramfs images must include nvme drivers."
+    info "Rebuilding for every installed kernel (not just the running one)."
+    # Install dracut drop-in to ensure NVMe modules in all future rebuilds
+    cat > /etc/dracut.conf.d/99-nvme-root.conf <<DRACUT_EOF
+# Root is on NVMe (pvmove from SATA) — always include NVMe drivers
+# Installed by honey-storage-migrate phase1
+add_drivers+=" nvme nvme_core "
+add_dracutmodules+=" lvm "
+hostonly="yes"
+early_microcode="yes"
+DRACUT_EOF
+    ok "Installed /etc/dracut.conf.d/99-nvme-root.conf"
+    for kver in $(ls /lib/modules/ | sort -V); do
+        if [ -f "/boot/vmlinuz-${kver}" ]; then
+            info "Rebuilding initramfs for ${kver}..."
+            run_cmd dracut --force "/boot/initramfs-${kver}.img" "${kver}"
+        fi
+    done
+    ok "All kernel initramfs rebuilt with NVMe drivers"
 
     echo ""
     echo "── Verify ──"
