@@ -59,8 +59,9 @@ let smiMitigationConfig =
       , enable "CONFIG_HWLAT_TRACER"
         -- Enable MSR access for SMI_COUNT (MSR 0x34) reading
       , enable "CONFIG_X86_MSR"
-        -- Enable Dell Remote BIOS Update driver (Linux-native BIOS updates)
-      , enable "CONFIG_DELL_RBU"
+        -- DELL_RBU disabled: Kconfig `select FW_LOADER_USER_HELPER` breaks systemd 257
+        -- Use F12 BIOS flash menu instead (just bios-prepare-usb)
+      , disable "CONFIG_DELL_RBU"
         -- Enable tracer snapshot for latency capture
       , enable "CONFIG_TRACER_SNAPSHOT"
       ]

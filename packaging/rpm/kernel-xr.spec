@@ -117,7 +117,9 @@ scripts/config --enable CONFIG_OSNOISE_TRACER
 scripts/config --enable CONFIG_TIMERLAT_TRACER
 scripts/config --enable CONFIG_TRACER_SNAPSHOT
 scripts/config --enable CONFIG_X86_MSR
-scripts/config --module CONFIG_DELL_RBU
+# DELL_RBU disabled: its Kconfig has `select FW_LOADER_USER_HELPER` which
+# breaks systemd 257 boot. Use F12 BIOS flash menu instead (just bios-prepare-usb).
+scripts/config --disable CONFIG_DELL_RBU
 scripts/config --disable CONFIG_ITCO_WDT
 
 # BCI workload support (CPU isolation, high-res timers)
