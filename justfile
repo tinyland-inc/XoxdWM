@@ -871,32 +871,35 @@ rollout-preflight host="honey":
     # Gather remote state in one SSH call
     echo ""
     echo "── Remote State ──"
-    REMOTE_STATE=$(ssh jess@{{host}} "bash -s" <<'REMOTE'
-    echo "KERNEL=$(uname -r)"
-    echo "BIOS=$(cat /sys/class/dmi/id/bios_version 2>/dev/null || echo unknown)"
-    echo "ROOTDEV=$(findmnt -no SOURCE / 2>/dev/null || echo unknown)"
-    echo "ROOTFS=$(findmnt -no FSTYPE / 2>/dev/null || echo unknown)"
-    echo "UPTIME=$(uptime -p 2>/dev/null || echo unknown)"
-    echo "BOOT_ENTRIES=$(ls /boot/loader/entries/*.conf 2>/dev/null | wc -l)"
-    echo "DEFAULT_KERNEL=$(sudo grubby --default-kernel 2>/dev/null || echo unknown)"
-    echo "BLS_ENABLED=$(grep -c GRUB_ENABLE_BLSCFG /etc/default/grub 2>/dev/null || echo 0)"
-    echo "GRUB_CMDLINE=$(grep GRUB_CMDLINE_LINUX /etc/default/grub 2>/dev/null | head -1)"
-    # Storage
-    echo "VG_RL00=$(sudo vgs --noheadings -o vg_name 2>/dev/null | grep -c rl00 || echo 0)"
-    echo "VG_NVME=$(sudo vgs --noheadings -o vg_name 2>/dev/null | grep -c nvme || echo 0)"
-    echo "LV_ATTRS=$(sudo lvs --noheadings -o lv_attr rl00/root 2>/dev/null | tr -d ' ' || echo unknown)"
-    echo "NVME0=$(test -b /dev/nvme0n1 && echo yes || echo no)"
-    echo "NVME1=$(test -b /dev/nvme1n1 && echo yes || echo no)"
-    echo "ROOT_USAGE=$(df --output=pcent / 2>/dev/null | tail -1 | tr -d ' %' || echo unknown)"
-    # Tools
-    echo "HAS_DHALL=$(command -v dhall &>/dev/null && echo yes || echo no)"
-    echo "HAS_BOOM=$(command -v boom &>/dev/null && echo yes || echo no)"
-    echo "HAS_LMSENSORS=$(command -v sensors &>/dev/null && echo yes || echo no)"
+    # Write preflight script to remote, execute with sudo
+    # Gather state with single-quoted values (safe for eval)
+    ssh jess@{{host}} "cat > /tmp/_preflight.sh" <<'REMOTE'
+    #!/bin/bash
+    qv() { local v; v=$("$@" 2>/dev/null) || v="${!#}"; echo "'${v//\'/\'\\\'\'}'"; }
+    P="__PF__"
+    echo "${P}KERNEL='$(uname -r)'"
+    echo "${P}BIOS='$(cat /sys/class/dmi/id/bios_version 2>/dev/null || echo unknown)'"
+    echo "${P}ROOTDEV='$(findmnt -no SOURCE / 2>/dev/null || echo unknown)'"
+    echo "${P}ROOTFS='$(findmnt -no FSTYPE / 2>/dev/null || echo unknown)'"
+    echo "${P}UPTIME='$(uptime -p 2>/dev/null || echo unknown)'"
+    echo "${P}BOOT_ENTRIES='$(ls /boot/loader/entries/*.conf 2>/dev/null | wc -l)'"
+    echo "${P}DEFAULT_KERNEL='$(grubby --default-kernel 2>/dev/null || echo unknown)'"
+    echo "${P}BLS_ENABLED='$(grep -c GRUB_ENABLE_BLSCFG /etc/default/grub 2>/dev/null; true)'"
+    echo "${P}VG_RL00='$(vgs --noheadings -o vg_name 2>/dev/null | grep -c rl00; true)'"
+    echo "${P}VG_NVME='$(vgs --noheadings -o vg_name 2>/dev/null | grep -c nvme; true)'"
+    echo "${P}LV_ATTRS='$(lvs --noheadings -o lv_attr rl00/root 2>/dev/null | tr -d ' ' || echo unknown)'"
+    echo "${P}NVME0='$(test -b /dev/nvme0n1 && echo yes || echo no)'"
+    echo "${P}NVME1='$(test -b /dev/nvme1n1 && echo yes || echo no)'"
+    echo "${P}ROOT_USAGE='$(df --output=pcent / 2>/dev/null | tail -1 | tr -d " %" || echo unknown)'"
+    echo "${P}HAS_DHALL='$(command -v dhall &>/dev/null && echo yes || echo no)'"
+    echo "${P}HAS_BOOM='$(command -v boom &>/dev/null && echo yes || echo no)'"
+    echo "${P}HAS_LMSENSORS='$(command -v sensors &>/dev/null && echo yes || echo no)'"
+    echo "${P}GRUB_CMDLINE='$(grep GRUB_CMDLINE_LINUX /etc/default/grub 2>/dev/null | head -1)'"
     REMOTE
-    )
+    REMOTE_STATE=$(ssh jess@{{host}} "chmod +x /tmp/_preflight.sh && echo 'tinyland' | sudo -S /tmp/_preflight.sh 2>/dev/null; rm -f /tmp/_preflight.sh")
 
-    # Parse remote state
-    eval "$REMOTE_STATE"
+    # Parse remote state — only eval lines with our prefix (ignores MOTD, sudo noise)
+    eval "$(echo "$REMOTE_STATE" | grep '^__PF__' | sed 's/^__PF__//')"
 
     info "Kernel: $KERNEL"
     info "BIOS: $BIOS"
