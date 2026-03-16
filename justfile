@@ -839,3 +839,333 @@ smi-validate host="honey" *args="":
     echo "=== SMI Validation on {{host}} ==="
     scp "{{project_root}}/packaging/scripts/smi-validate" jess@{{host}}:/tmp/
     ssh jess@{{host}} "chmod +x /tmp/smi-validate && echo 'tinyland' | sudo -S /tmp/smi-validate {{args}}"
+
+# ── rollout ─────────────────────────────────────────
+
+# Full rollout preflight — validates honey is ready for storage migration + boot IaC.
+# Checks: SSH, boot state, storage layout, kernel, BIOS version, BLS entries.
+# Non-destructive. Run this before any phase1+ operations.
+[group('deploy')]
+rollout-preflight host="honey":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=========================================="
+    echo " Rollout Preflight: {{host}}"
+    echo "=========================================="
+    FAIL=0
+    pass() { echo -e "  \033[0;32m[OK]\033[0m $1"; }
+    fail() { echo -e "  \033[0;31m[FAIL]\033[0m $1"; FAIL=1; }
+    warn() { echo -e "  \033[0;33m[WARN]\033[0m $1"; }
+    info() { echo -e "  \033[0;34m[INFO]\033[0m $1"; }
+
+    # SSH connectivity
+    echo ""
+    echo "── Connectivity ──"
+    if ssh -o ConnectTimeout=5 jess@{{host}} "echo ok" &>/dev/null; then
+        pass "SSH to {{host}}"
+    else
+        fail "Cannot SSH to {{host}}"
+        exit 1
+    fi
+
+    # Gather remote state in one SSH call
+    echo ""
+    echo "── Remote State ──"
+    REMOTE_STATE=$(ssh jess@{{host}} "bash -s" <<'REMOTE'
+    echo "KERNEL=$(uname -r)"
+    echo "BIOS=$(cat /sys/class/dmi/id/bios_version 2>/dev/null || echo unknown)"
+    echo "ROOTDEV=$(findmnt -no SOURCE / 2>/dev/null || echo unknown)"
+    echo "ROOTFS=$(findmnt -no FSTYPE / 2>/dev/null || echo unknown)"
+    echo "UPTIME=$(uptime -p 2>/dev/null || echo unknown)"
+    echo "BOOT_ENTRIES=$(ls /boot/loader/entries/*.conf 2>/dev/null | wc -l)"
+    echo "DEFAULT_KERNEL=$(sudo grubby --default-kernel 2>/dev/null || echo unknown)"
+    echo "BLS_ENABLED=$(grep -c GRUB_ENABLE_BLSCFG /etc/default/grub 2>/dev/null || echo 0)"
+    echo "GRUB_CMDLINE=$(grep GRUB_CMDLINE_LINUX /etc/default/grub 2>/dev/null | head -1)"
+    # Storage
+    echo "VG_RL00=$(sudo vgs --noheadings -o vg_name 2>/dev/null | grep -c rl00 || echo 0)"
+    echo "VG_NVME=$(sudo vgs --noheadings -o vg_name 2>/dev/null | grep -c nvme || echo 0)"
+    echo "LV_ATTRS=$(sudo lvs --noheadings -o lv_attr rl00/root 2>/dev/null | tr -d ' ' || echo unknown)"
+    echo "NVME0=$(test -b /dev/nvme0n1 && echo yes || echo no)"
+    echo "NVME1=$(test -b /dev/nvme1n1 && echo yes || echo no)"
+    echo "ROOT_USAGE=$(df --output=pcent / 2>/dev/null | tail -1 | tr -d ' %' || echo unknown)"
+    # Tools
+    echo "HAS_DHALL=$(command -v dhall &>/dev/null && echo yes || echo no)"
+    echo "HAS_BOOM=$(command -v boom &>/dev/null && echo yes || echo no)"
+    echo "HAS_LMSENSORS=$(command -v sensors &>/dev/null && echo yes || echo no)"
+    REMOTE
+    )
+
+    # Parse remote state
+    eval "$REMOTE_STATE"
+
+    info "Kernel: $KERNEL"
+    info "BIOS: $BIOS"
+    info "Root: $ROOTDEV ($ROOTFS)"
+    info "Uptime: $UPTIME"
+
+    # Boot checks
+    echo ""
+    echo "── Boot Configuration ──"
+    if [ "$BLS_ENABLED" -ge 1 ]; then
+        pass "BLS enabled in /etc/default/grub"
+    else
+        fail "BLS not enabled — required for boot-apply pipeline"
+    fi
+
+    if [ "$BOOT_ENTRIES" -ge 2 ]; then
+        pass "Multiple BLS entries ($BOOT_ENTRIES) — rollback available"
+    elif [ "$BOOT_ENTRIES" -eq 1 ]; then
+        warn "Only 1 BLS entry — consider keeping a fallback"
+    else
+        fail "No BLS entries found"
+    fi
+
+    info "Default kernel: $DEFAULT_KERNEL"
+    info "GRUB cmdline: $GRUB_CMDLINE"
+
+    # Storage checks
+    echo ""
+    echo "── Storage ──"
+    if [ "$VG_RL00" -ge 1 ]; then
+        pass "VG rl00 exists"
+    else
+        fail "VG rl00 not found"
+    fi
+
+    if echo "$LV_ATTRS" | grep -q "^-wi"; then
+        pass "rl00/root is thick LVM (attrs: $LV_ATTRS)"
+    elif echo "$LV_ATTRS" | grep -q "^V"; then
+        fail "rl00/root is THIN LVM — GRUB cannot read this (BZ#1164947)"
+    else
+        info "rl00/root attrs: $LV_ATTRS"
+    fi
+
+    if [ "$VG_NVME" -ge 1 ]; then
+        warn "Failed 'nvme' VG still exists — phase1 will clean this"
+    else
+        pass "No stale 'nvme' VG"
+    fi
+
+    if [ "$NVME0" = "yes" ]; then
+        pass "nvme0n1 present (migration target)"
+    else
+        fail "nvme0n1 not found"
+    fi
+
+    if [ "$NVME1" = "yes" ]; then
+        pass "nvme1n1 present (data thin pool target)"
+    else
+        warn "nvme1n1 not found (phase2 requires it)"
+    fi
+
+    info "Root usage: ${ROOT_USAGE}%"
+    if [ "$ROOT_USAGE" != "unknown" ] && [ "$ROOT_USAGE" -gt 90 ]; then
+        warn "Root > 90% full — clean up before pvmove"
+    fi
+
+    # BIOS check
+    echo ""
+    echo "── BIOS ──"
+    if [ "$BIOS" = "A34" ]; then
+        pass "BIOS A34 (RT-ready, TSC errata fixed)"
+    elif [ "$BIOS" = "A02" ]; then
+        warn "BIOS A02 — flash A34 before RT kernel (just bios-prepare-usb)"
+    else
+        info "BIOS: $BIOS"
+    fi
+
+    # Tool availability
+    echo ""
+    echo "── Tools ──"
+    if [ "$HAS_DHALL" = "yes" ]; then
+        pass "dhall available"
+    else
+        warn "dhall not installed (needed for boot-apply on remote)"
+    fi
+    if [ "$HAS_BOOM" = "yes" ]; then
+        pass "boom-boot available"
+    else
+        info "boom-boot not installed (phase4 will install it)"
+    fi
+    if [ "$HAS_LMSENSORS" = "yes" ]; then
+        pass "lm_sensors available"
+    else
+        info "lm_sensors not installed (gpu-monitor will work without it)"
+    fi
+
+    # Local Dhall validation
+    echo ""
+    echo "── Local Dhall ──"
+    if just boot-validate >/dev/null 2>&1; then
+        pass "All 13 Dhall files validate"
+    else
+        fail "Dhall validation failed — run 'just boot-validate' for details"
+    fi
+
+    # Summary
+    echo ""
+    echo "=========================================="
+    if [ "$FAIL" -eq 0 ]; then
+        echo " Preflight PASSED — ready for rollout."
+        echo ""
+        echo " Execution order:"
+        echo "   1. just storage-migrate {{host}} phase1        # pvmove root to NVMe"
+        echo "   2. ssh jess@{{host}} sudo reboot               # verify NVMe root"
+        echo "   3. just storage-migrate {{host}} phase2        # data thin pool"
+        echo "   4. just storage-migrate {{host}} phase3        # HDD archive"
+        echo "   5. just storage-migrate {{host}} phase4        # boom-boot"
+        echo "   6. just boot-apply {{host}} stock --dry-run    # validate baseline"
+        echo "   7. just boot-apply {{host}} xr --dry-run       # preview XR config"
+    else
+        echo " Preflight FAILED — fix issues above before proceeding."
+    fi
+    echo "=========================================="
+    exit $FAIL
+
+# ── storage ──────────────────────────────────────────
+
+# Run pre-flight checks for storage migration (non-destructive).
+[group('storage')]
+storage-preflight host="honey":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Storage pre-flight on {{host}} ==="
+    scp "{{project_root}}/packaging/scripts/honey-storage-migrate" jess@{{host}}:/tmp/
+    ssh jess@{{host}} "chmod +x /tmp/honey-storage-migrate && echo 'tinyland' | sudo -S /tmp/honey-storage-migrate phase0"
+
+# Run storage migration phase (pvmove root to NVMe, etc).
+# Usage: just storage-migrate honey phase1
+#   phase0: pre-flight (safe)
+#   phase1: pvmove root SATA→NVMe (live)
+#   phase2: data thin pool on second NVMe
+#   phase3: HDD archive tier
+#   phase4: boom-boot for kernel snapshots
+[group('storage')]
+storage-migrate host="honey" phase="phase0" *args="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Storage migration {{phase}} on {{host}} ==="
+    scp "{{project_root}}/packaging/scripts/honey-storage-migrate" jess@{{host}}:/tmp/
+    ssh jess@{{host}} "chmod +x /tmp/honey-storage-migrate && echo 'tinyland' | sudo -S /tmp/honey-storage-migrate {{phase}} {{args}}"
+
+# Show current storage layout on remote host.
+[group('storage')]
+storage-status host="honey":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Storage status on {{host}} ==="
+    ssh jess@{{host}} "echo '── PVs ──' && sudo pvs 2>/dev/null; echo '── VGs ──' && sudo vgs 2>/dev/null; echo '── LVs ──' && sudo lvs 2>/dev/null; echo '── df ──' && df -h / /boot /home /data /archive 2>/dev/null; echo '── lsblk ──' && lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT"
+
+# ── boot (Dhall IaC) ────────────────────────────────
+
+# Type-check all Dhall files (local, no remote access needed).
+# Validates types, defaults, assertions, and rendering pipeline.
+[group('boot')]
+boot-validate:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Dhall validation ==="
+    PASS=0; TOTAL=0
+    for f in \
+        packaging/dhall/Platform.dhall \
+        packaging/dhall/KernelConfig.dhall \
+        packaging/dhall/BootParams.dhall \
+        packaging/dhall/types/*.dhall \
+        packaging/dhall/defaults/*.dhall \
+        packaging/dhall/generate-boot.dhall; do
+        TOTAL=$((TOTAL + 1))
+        printf "  %-55s" "$f"
+        if dhall type --file "$f" >/dev/null 2>&1; then
+            echo "OK"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL"
+            dhall type --file "$f" 2>&1 | head -5 | sed 's/^/    /'
+        fi
+    done
+    echo ""
+    echo "  $PASS/$TOTAL passed"
+    [ "$PASS" -eq "$TOTAL" ]
+
+# Render a Dhall boot generation locally (dry-run, no remote access needed).
+# Usage: just boot-render [config]
+#   config: stock, xr, debug (default: xr)
+[group('boot')]
+boot-render config="xr":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Rendering boot generation: {{config}} ==="
+    cd "{{project_root}}"
+    DHALL_FILE="packaging/dhall/defaults/honey-{{config}}.dhall"
+    if [[ ! -f "$DHALL_FILE" ]]; then
+        echo "Config not found: $DHALL_FILE"
+        echo "Available: $(ls packaging/dhall/defaults/ | sed 's/honey-//;s/.dhall//' | tr '\n' ' ')"
+        exit 1
+    fi
+    dhall text <<DHALL
+    let BootEntry = ./packaging/dhall/types/BootEntry.dhall
+    let GrubDefaults = ./packaging/dhall/types/GrubDefaults.dhall
+    let DracutConfig = ./packaging/dhall/types/DracutConfig.dhall
+    let FstabTypes = ./packaging/dhall/types/FstabEntry.dhall
+    let gen = ./${DHALL_FILE}
+    let blsEntry = BootEntry.render gen.bootEntry
+    let grubDefaults = GrubDefaults.render gen.grubDefaults
+    let dracutConfig = DracutConfig.render gen.dracutConfig
+    let fstab =
+          List/fold FstabTypes.FstabEntry gen.fstabEntries Text
+            (\(entry : FstabTypes.FstabEntry) -> \(acc : Text) ->
+              acc ++ FstabTypes.render entry ++ "\n") ""
+    in    "# Boot Generation \${Natural/show gen.generation}\n"
+      ++  "# \${gen.description}\n#\n"
+      ++  "# Root: \${gen.rootDevice} (VG: \${gen.rootVG}, thick LVM)\n"
+      ++  "# GRUB cannot read thin LVM -- Red Hat BZ#1164947 (2014, WONTFIX)\n\n"
+      ++  "### BLS Entry (/boot/loader/entries/) ###\n" ++ blsEntry ++ "\n"
+      ++  "### /etc/default/grub ###\n" ++ grubDefaults ++ "\n"
+      ++  "### /etc/dracut.conf.d/ ###\n" ++ dracutConfig ++ "\n"
+      ++  "### fstab entries ###\n" ++ fstab
+    DHALL
+
+# Apply a Dhall boot generation to remote host.
+# Usage: just boot-apply honey [config]
+#   config: stock, xr, debug (default: xr)
+[group('boot')]
+boot-apply host="honey" config="xr" mode="--dry-run":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Boot apply ({{mode}}) {{config}} on {{host}} ==="
+    scp -r "{{project_root}}/packaging/dhall" "{{project_root}}/packaging/scripts/boot-apply" jess@{{host}}:/tmp/
+    ssh jess@{{host}} "chmod +x /tmp/boot-apply && echo 'tinyland' | sudo -S /tmp/boot-apply {{mode}} {{config}}"
+
+# Verify boot configuration on remote host.
+[group('boot')]
+boot-verify host="honey":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Boot verification on {{host}} ==="
+    ssh jess@{{host}} "echo '── Kernel ──' && uname -r; echo '── Default ──' && sudo grubby --default-kernel; echo '── BLS Entries ──' && ls -la /boot/loader/entries/; echo '── Current cmdline ──' && cat /proc/cmdline; echo '── GRUB defaults ──' && cat /etc/default/grub"
+
+# ── gpu ──────────────────────────────────────────────
+
+# Show GPU status (temps, fan, power) on remote host.
+[group('gpu')]
+gpu-status host="honey":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    scp "{{project_root}}/packaging/scripts/gpu-monitor" jess@{{host}}:/tmp/
+    ssh jess@{{host}} "chmod +x /tmp/gpu-monitor && /tmp/gpu-monitor status"
+
+# Watch GPU temps in real-time on remote host.
+[group('gpu')]
+gpu-watch host="honey":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    scp "{{project_root}}/packaging/scripts/gpu-monitor" jess@{{host}}:/tmp/
+    ssh -t jess@{{host}} "chmod +x /tmp/gpu-monitor && /tmp/gpu-monitor watch"
+
+# Quiet Dell chassis fans (disable third-party GPU detection response).
+[group('gpu')]
+gpu-dell-quiet host="honey":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    scp "{{project_root}}/packaging/scripts/gpu-monitor" jess@{{host}}:/tmp/
+    ssh jess@{{host}} "chmod +x /tmp/gpu-monitor && echo 'tinyland' | sudo -S /tmp/gpu-monitor dell-quiet"

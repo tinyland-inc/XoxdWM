@@ -70,6 +70,42 @@ jobs:
       - name: Build devShell
         run: nix build .#devShells.x86_64-linux.default
 
+  boot-validate:
+    name: Boot Config (Dhall)
+    if: vars.USE_SELFHOSTED != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v30
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+        continue-on-error: true
+      - name: Validate Dhall boot types and configs
+        run: |
+          nix shell nixpkgs#dhall --command bash -c '
+            PASS=0; TOTAL=0
+            for f in \
+                packaging/dhall/Platform.dhall \
+                packaging/dhall/KernelConfig.dhall \
+                packaging/dhall/BootParams.dhall \
+                packaging/dhall/types/*.dhall \
+                packaging/dhall/defaults/*.dhall \
+                packaging/dhall/generate-boot.dhall; do
+              TOTAL=$((TOTAL + 1))
+              printf "  %-55s" "$f"
+              if dhall type --file "$f" >/dev/null 2>&1; then
+                echo "OK"
+                PASS=$((PASS + 1))
+              else
+                echo "FAIL"
+                dhall type --file "$f" 2>&1 | head -5
+              fi
+            done
+            echo ""
+            echo "  $PASS/$TOTAL passed"
+            [ "$PASS" -eq "$TOTAL" ]
+          '
+
   changelog-validate:
     name: Changelog Validate
     if: vars.USE_SELFHOSTED != 'true'

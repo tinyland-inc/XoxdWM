@@ -1,0 +1,168 @@
+#!/bin/bash
+# gpu-monitor — GPU temperature and fan monitoring for RX 9070 XT
+#
+# The RX 9070 XT ships with zero-RPM mode enabled by default:
+#   - Fans stop below ~50C junction temp
+#   - Fans start at ~60C junction temp
+#   - At idle in a well-ventilated case, passive heatsink handles thermal load
+#   - This is by design (RDNA4 zero-RPM default)
+#
+# Usage: ./gpu-monitor [status | watch | fan-on | fan-auto | dell-quiet | install-lact]
+set -euo pipefail
+
+HWMON=""
+for h in /sys/class/drm/card*/device/hwmon/hwmon*; do
+    if [ -d "$h" ] && [ -f "$h/name" ]; then
+        NAME=$(cat "$h/name" 2>/dev/null)
+        if [ "$NAME" = "amdgpu" ]; then
+            HWMON="$h"
+            break
+        fi
+    fi
+done
+
+if [ -z "$HWMON" ] && [ "${1:-status}" != "install-lact" ] && [ "${1:-status}" != "dell-quiet" ]; then
+    echo "ERROR: No amdgpu hwmon found. Is the GPU driver loaded?"
+    echo "  Check: lspci -k | grep -A2 VGA"
+    exit 1
+fi
+
+gpu_status() {
+    echo "=== RX 9070 XT GPU Status ==="
+    echo ""
+
+    # Temperatures
+    echo "── Temperatures ──"
+    for temp in "$HWMON"/temp*_input; do
+        [ -f "$temp" ] || continue
+        LABEL_FILE="${temp%_input}_label"
+        LABEL=$(cat "$LABEL_FILE" 2>/dev/null || echo "$(basename "${temp%_input}")")
+        VAL=$(cat "$temp" 2>/dev/null || echo "0")
+        TEMP_C=$((VAL / 1000))
+        echo "  $LABEL: ${TEMP_C}C"
+    done
+
+    # Fan
+    echo ""
+    echo "── Fan ──"
+    FAN_RPM=$(cat "$HWMON/fan1_input" 2>/dev/null || echo "0")
+    FAN_TARGET=$(cat "$HWMON/fan1_target" 2>/dev/null || echo "N/A")
+    FAN_ENABLE=$(cat "$HWMON/fan1_enable" 2>/dev/null || echo "N/A")
+    echo "  RPM: $FAN_RPM"
+    echo "  Target: $FAN_TARGET"
+    echo "  Enable: $FAN_ENABLE"
+
+    if [ "$FAN_RPM" = "0" ]; then
+        echo "  Status: Zero-RPM mode active (normal at idle)"
+    fi
+
+    # Power
+    echo ""
+    echo "── Power ──"
+    POWER=$(cat "$HWMON/power1_average" 2>/dev/null || echo "0")
+    POWER_W=$((POWER / 1000000))
+    POWER_CAP=$(cat "$HWMON/power1_cap" 2>/dev/null || echo "0")
+    POWER_CAP_W=$((POWER_CAP / 1000000))
+    echo "  Current: ${POWER_W}W"
+    echo "  Cap: ${POWER_CAP_W}W"
+
+    # Performance level
+    echo ""
+    echo "── Performance ──"
+    PERF=$(cat /sys/class/drm/card0/device/power_dpm_force_performance_level 2>/dev/null || echo "N/A")
+    echo "  DPM level: $PERF"
+
+    # Zero-RPM sysfs (kernel 6.13+)
+    ZR=$(cat /sys/class/drm/card0/device/gpu_od/fan_ctrl/fan_zero_rpm_enable 2>/dev/null || echo "N/A")
+    if [ "$ZR" != "N/A" ]; then
+        echo "  Zero-RPM: $ZR"
+    fi
+}
+
+gpu_watch() {
+    echo "Watching GPU temps (Ctrl-C to stop)..."
+    while true; do
+        EDGE=$(cat "$HWMON/temp1_input" 2>/dev/null || echo "0")
+        JUNC=$(cat "$HWMON/temp2_input" 2>/dev/null || echo "0")
+        MEM=$(cat "$HWMON/temp3_input" 2>/dev/null || echo "0")
+        FAN=$(cat "$HWMON/fan1_input" 2>/dev/null || echo "0")
+        POWER=$(cat "$HWMON/power1_average" 2>/dev/null || echo "0")
+        printf "\r  Edge:%3dC  Junction:%3dC  Mem:%3dC  Fan:%5d RPM  Power:%3dW  " \
+            $((EDGE/1000)) $((JUNC/1000)) $((MEM/1000)) "$FAN" $((POWER/1000000))
+        sleep 2
+    done
+}
+
+fan_on() {
+    echo "Forcing fans on (disabling zero-RPM)..."
+    ZR_PATH="/sys/class/drm/card0/device/gpu_od/fan_ctrl/fan_zero_rpm_enable"
+    if [ ! -f "$ZR_PATH" ]; then
+        echo "ERROR: fan_zero_rpm_enable not found (requires kernel 6.13+)"
+        echo "  Current kernel: $(uname -r)"
+        echo "  Consider using LACT instead: $0 install-lact"
+        exit 1
+    fi
+    echo "manual" > /sys/class/drm/card0/device/power_dpm_force_performance_level
+    echo "0" > "$ZR_PATH"
+    echo "c" > "$ZR_PATH"
+    echo "Done. Fans should spin up. Verify: $0 status"
+}
+
+fan_auto() {
+    echo "Restoring automatic fan control (zero-RPM enabled)..."
+    echo "auto" > /sys/class/drm/card0/device/power_dpm_force_performance_level 2>/dev/null || true
+    echo "Done."
+}
+
+dell_quiet() {
+    echo "=== Dell Chassis Fan Control ==="
+    echo ""
+    if ! command -v ipmitool &>/dev/null; then
+        echo "ipmitool not found. Install: sudo dnf install ipmitool"
+        echo "Then: sudo modprobe ipmi_devintf ipmi_si"
+        exit 1
+    fi
+    echo "Disabling third-party PCIe card cooling response..."
+    echo "(Dell T7810 ramps chassis fans for unrecognized GPUs like the 9070 XT)"
+    ipmitool raw 0x30 0xce 0x01 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x01 0x00 0x00
+    echo "Done. Chassis fans should quiet down."
+    echo "Note: this resets on BIOS update or AC power loss."
+}
+
+install_lact() {
+    echo "=== Installing LACT (Linux AMDGPU Controller) ==="
+    echo ""
+    echo "LACT runs as a systemd daemon, persists config in /etc/lact/config.yaml,"
+    echo "and does not require a GUI. Supports fan curves, zero-RPM toggle, power limits."
+    echo ""
+    if command -v lact &>/dev/null; then
+        echo "LACT already installed: $(lact --version 2>&1)"
+        echo "Config: /etc/lact/config.yaml"
+        echo "Status: systemctl status lactd"
+        exit 0
+    fi
+    echo "Install from: https://github.com/ilya-zlobintsev/LACT"
+    echo ""
+    echo "On Rocky/RHEL:"
+    echo "  sudo dnf copr enable ilyaz/LACT"
+    echo "  sudo dnf install lact"
+    echo "  sudo systemctl enable --now lactd"
+    echo ""
+    echo "Or build from source:"
+    echo "  git clone https://github.com/ilya-zlobintsev/LACT"
+    echo "  cd LACT && cargo build --release"
+    echo "  sudo cp target/release/lact /usr/local/bin/"
+}
+
+case "${1:-status}" in
+    status)       gpu_status ;;
+    watch)        gpu_watch ;;
+    fan-on)       fan_on ;;
+    fan-auto)     fan_auto ;;
+    dell-quiet)   dell_quiet ;;
+    install-lact) install_lact ;;
+    *)
+        echo "Usage: $0 [status | watch | fan-on | fan-auto | dell-quiet | install-lact]"
+        exit 1
+        ;;
+esac

@@ -147,6 +147,7 @@
             nixpkgs-fmt
             direnv
             cachix
+            dhall
 
             # Testing
             cage   # single-window Wayland compositor for testing

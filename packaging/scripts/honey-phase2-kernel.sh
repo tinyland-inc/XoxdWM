@@ -2,6 +2,12 @@
 # Phase 2: Kernel upgrade for Beyond 2e + RDNA 4 display support
 # Run on honey as: sudo bash honey-phase2-kernel.sh
 #
+# DEPRECATED: This script calls grub2-mkconfig, which is unsafe with BLS.
+# For new boot configuration changes, use the Dhall pipeline instead:
+#   just boot-render xr        # preview rendered config
+#   just boot-apply honey xr   # apply via boot-apply script
+# See: packaging/scripts/boot-apply, packaging/dhall/defaults/
+#
 # Installs ELRepo kernel-ml (mainline ~6.15) alongside existing Rocky kernel.
 # The original kernel remains as a fallback boot option.
 

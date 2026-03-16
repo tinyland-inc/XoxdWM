@@ -1,0 +1,275 @@
+#!/bin/bash
+# boot-apply — Apply a Dhall-rendered boot generation to the system
+#
+# Safety-first boot configuration pipeline:
+#   1. Render from Dhall into staging directory
+#   2. Validate: dhall text succeeds, diff shows expected changes
+#   3. Backup current BLS entry
+#   4. Create NEW BLS entry (never modify existing)
+#   5. Set new entry as default via grubby --set-default
+#   6. If dracut config changed: dracut --force
+#   7. Verify: grubby --info=ALL shows both old and new entries
+#   8. NEVER run grub2-mkconfig — BLS entries are the source of truth
+#
+# Usage: sudo ./boot-apply [--dry-run | --apply] [config]
+#   config: stock, xr, debug (default: xr)
+#
+# CRITICAL SAFETY RULES:
+#   - NEVER modify ALL boot entries — always keep at least one untouched
+#   - NEVER run grub2-mkconfig (BLS is source of truth)
+#   - GRUB cannot read thin LVM (BZ#1164947) — root must be thick
+#   - Create NEW entries instead of modifying existing ones
+#   - Always backup before modifying
+set -euo pipefail
+
+RED='\033[0;31m'
+GRN='\033[0;32m'
+YEL='\033[0;33m'
+BLU='\033[0;34m'
+NC='\033[0m'
+
+ok()   { echo -e "  ${GRN}[OK]${NC} $1"; }
+warn() { echo -e "  ${YEL}[WARN]${NC} $1"; }
+fail() { echo -e "  ${RED}[FAIL]${NC} $1"; }
+info() { echo -e "  ${BLU}[INFO]${NC} $1"; }
+
+MODE="${1:---dry-run}"
+CONFIG="${2:-xr}"
+STAGING="/tmp/boot-staging-$$"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Find dhall directory: works both from repo (../dhall) and remote deploy (./dhall sibling)
+if [ -d "$SCRIPT_DIR/../dhall" ]; then
+    DHALL_DIR="$(cd "$SCRIPT_DIR/../dhall" && pwd)"
+elif [ -d "$SCRIPT_DIR/dhall" ]; then
+    DHALL_DIR="$(cd "$SCRIPT_DIR/dhall" && pwd)"
+else
+    echo "ERROR: Cannot find dhall directory relative to $SCRIPT_DIR"
+    echo "  Expected at: $SCRIPT_DIR/../dhall or $SCRIPT_DIR/dhall"
+    exit 1
+fi
+
+if [ "$(id -u)" -ne 0 ] && [ "$MODE" = "--apply" ]; then
+    echo "ERROR: --apply requires root. Use: sudo $0 --apply $CONFIG"
+    exit 1
+fi
+
+echo "=========================================="
+echo " boot-apply: Dhall boot generation pipeline"
+echo " Mode: $MODE | Config: $CONFIG"
+echo "=========================================="
+
+# ── Step 1: Render from Dhall ──
+echo ""
+echo "── Step 1: Render from Dhall ──"
+
+mkdir -p "$STAGING"
+trap "rm -rf $STAGING" EXIT
+
+# Select config file
+DHALL_FILE="$DHALL_DIR/defaults/honey-${CONFIG}.dhall"
+if [ ! -f "$DHALL_FILE" ]; then
+    fail "Config not found: $DHALL_FILE"
+    echo "  Available configs:"
+    ls "$DHALL_DIR/defaults/" 2>/dev/null | sed 's/honey-//;s/.dhall//' | while read c; do
+        echo "    - $c"
+    done
+    exit 1
+fi
+
+if ! command -v dhall &>/dev/null; then
+    fail "dhall not found in PATH"
+    echo "  Install: nix-env -iA nixpkgs.dhall"
+    exit 1
+fi
+
+# Render the full generation (inline expression to respect config selection)
+info "Rendering $DHALL_FILE..."
+if dhall text <<FULL_RENDER > "$STAGING/rendered.txt" 2>"$STAGING/dhall-errors.txt"
+let BootEntry = $DHALL_DIR/types/BootEntry.dhall
+let GrubDefaults = $DHALL_DIR/types/GrubDefaults.dhall
+let DracutConfig = $DHALL_DIR/types/DracutConfig.dhall
+let FstabTypes = $DHALL_DIR/types/FstabEntry.dhall
+let gen = $DHALL_FILE
+let blsEntry = BootEntry.render gen.bootEntry
+let grubDefaults = GrubDefaults.render gen.grubDefaults
+let dracutConfig = DracutConfig.render gen.dracutConfig
+let fstab =
+      List/fold FstabTypes.FstabEntry gen.fstabEntries Text
+        (\(entry : FstabTypes.FstabEntry) -> \(acc : Text) ->
+          acc ++ FstabTypes.render entry ++ "\n") ""
+in    "# Boot Generation \${Natural/show gen.generation}\n"
+  ++  "# \${gen.description}\n#\n"
+  ++  "# Root: \${gen.rootDevice} (VG: \${gen.rootVG}, thick LVM)\n"
+  ++  "# GRUB cannot read thin LVM -- Red Hat BZ#1164947 (2014, WONTFIX)\n\n"
+  ++  "### BLS Entry ###\n" ++ blsEntry ++ "\n"
+  ++  "### /etc/default/grub ###\n" ++ grubDefaults ++ "\n"
+  ++  "### /etc/dracut.conf.d/ ###\n" ++ dracutConfig ++ "\n"
+  ++  "### fstab entries ###\n" ++ fstab
+FULL_RENDER
+then
+    ok "Dhall rendered successfully (type-checked + assertions passed)"
+else
+    fail "Dhall rendering failed — config has type or assertion errors"
+    cat "$STAGING/dhall-errors.txt"
+    exit 1
+fi
+
+# Also render individual components for installation
+dhall text <<EXPR > "$STAGING/bls-entry.conf" 2>/dev/null
+let B = $DHALL_DIR/types/BootEntry.dhall
+let config = $DHALL_FILE
+in B.render config.bootEntry
+EXPR
+ok "BLS entry rendered"
+
+dhall text <<EXPR > "$STAGING/grub-defaults" 2>/dev/null
+let G = $DHALL_DIR/types/GrubDefaults.dhall
+let config = $DHALL_FILE
+in G.render config.grubDefaults
+EXPR
+ok "GRUB defaults rendered"
+
+dhall text <<EXPR > "$STAGING/dracut.conf" 2>/dev/null
+let D = $DHALL_DIR/types/DracutConfig.dhall
+let config = $DHALL_FILE
+in D.render config.dracutConfig
+EXPR
+ok "Dracut config rendered"
+
+# ── Step 2: Validate ──
+echo ""
+echo "── Step 2: Validate ──"
+
+# Extract kernel version from rendered BLS
+KVER=$(grep "^version " "$STAGING/bls-entry.conf" | awk '{print $2}')
+info "Target kernel: $KVER"
+
+# Check that vmlinuz exists (or would exist)
+if [ -f "/boot/vmlinuz-$KVER" ]; then
+    ok "vmlinuz-$KVER exists"
+elif [ "$MODE" = "--dry-run" ]; then
+    warn "vmlinuz-$KVER not found (dry-run, may not be installed yet)"
+else
+    fail "vmlinuz-$KVER not found — install kernel first"
+    exit 1
+fi
+
+# Check that initramfs exists (or would exist)
+if [ -f "/boot/initramfs-${KVER}.img" ]; then
+    ok "initramfs-${KVER}.img exists"
+elif [ "$MODE" = "--dry-run" ]; then
+    warn "initramfs-${KVER}.img not found (dry-run)"
+else
+    warn "initramfs-${KVER}.img not found — will rebuild with dracut"
+fi
+
+# Show diff against current BLS entry
+CURRENT_ENTRY=$(ls /boot/loader/entries/*"$KVER"*.conf 2>/dev/null | head -1 || true)
+if [ -n "$CURRENT_ENTRY" ]; then
+    echo ""
+    info "Diff against current entry ($CURRENT_ENTRY):"
+    diff "$CURRENT_ENTRY" "$STAGING/bls-entry.conf" || true
+else
+    info "No existing BLS entry for $KVER (new entry)"
+fi
+
+# Show full rendered output
+echo ""
+info "Full rendered config:"
+cat "$STAGING/rendered.txt" | sed 's/^/    /'
+
+# ── Dry-run stops here ──
+if [ "$MODE" = "--dry-run" ]; then
+    echo ""
+    echo "=========================================="
+    echo " Dry-run complete. Review above output."
+    echo " To apply: sudo $0 --apply $CONFIG"
+    echo "=========================================="
+    exit 0
+fi
+
+# ── Step 3: Backup current ──
+echo ""
+echo "── Step 3: Backup current entries ──"
+
+MACHINE_ID=$(cat /etc/machine-id)
+ENTRY_DIR="/boot/loader/entries"
+
+# Backup all existing entries
+for entry in "$ENTRY_DIR"/*.conf; do
+    [ -f "$entry" ] || continue
+    cp "$entry" "${entry}.bak"
+    ok "Backed up $(basename "$entry")"
+done
+
+# ── Step 4: Create NEW BLS entry ──
+echo ""
+echo "── Step 4: Create new BLS entry ──"
+
+NEW_ENTRY="$ENTRY_DIR/${MACHINE_ID}-${KVER}.conf"
+
+# Safety: never overwrite without backup
+if [ -f "$NEW_ENTRY" ]; then
+    warn "Entry already exists: $(basename "$NEW_ENTRY")"
+    info "Backup preserved at ${NEW_ENTRY}.bak"
+fi
+
+cp "$STAGING/bls-entry.conf" "$NEW_ENTRY"
+ok "Created $(basename "$NEW_ENTRY")"
+
+# ── Step 5: Set as default ──
+echo ""
+echo "── Step 5: Set default kernel ──"
+
+if [ -f "/boot/vmlinuz-$KVER" ]; then
+    grubby --set-default "/boot/vmlinuz-$KVER"
+    ok "Default set to $KVER"
+else
+    warn "Cannot set default — vmlinuz not found"
+fi
+
+# ── Step 6: Dracut if needed ──
+echo ""
+echo "── Step 6: Dracut config ──"
+
+DRACUT_DEST="/etc/dracut.conf.d/99-xr-${CONFIG}.conf"
+if [ -f "$DRACUT_DEST" ] && diff -q "$STAGING/dracut.conf" "$DRACUT_DEST" &>/dev/null; then
+    ok "Dracut config unchanged"
+else
+    cp "$STAGING/dracut.conf" "$DRACUT_DEST"
+    ok "Installed dracut config: $DRACUT_DEST"
+
+    if [ -f "/boot/vmlinuz-$KVER" ]; then
+        info "Rebuilding initramfs for $KVER..."
+        dracut --force "/boot/initramfs-${KVER}.img" "$KVER"
+        ok "initramfs rebuilt"
+    fi
+fi
+
+# ── Step 7: Verify ──
+echo ""
+echo "── Step 7: Verify ──"
+
+info "All boot entries:"
+grubby --info=ALL 2>/dev/null | grep -E "^(index|kernel|title)=" | while IFS= read -r line; do
+    echo "    $line"
+done
+
+DEFAULT=$(grubby --default-kernel 2>/dev/null || echo "unknown")
+info "Default kernel: $DEFAULT"
+
+# Count total entries — must be > 1 (safety: never leave only one)
+ENTRY_COUNT=$(ls "$ENTRY_DIR"/*.conf 2>/dev/null | wc -l)
+if [ "$ENTRY_COUNT" -gt 1 ]; then
+    ok "Multiple boot entries exist ($ENTRY_COUNT total) — rollback available"
+else
+    warn "Only $ENTRY_COUNT boot entry — consider keeping the stock entry"
+fi
+
+echo ""
+echo "=========================================="
+echo " Boot generation applied successfully."
+echo " Reboot to test. If boot fails:"
+echo "   - Select previous entry from GRUB menu"
+echo "   - Or: grubby --set-default /boot/vmlinuz-<old-version>"
+echo "=========================================="

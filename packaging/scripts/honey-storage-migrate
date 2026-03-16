@@ -1,0 +1,411 @@
+#!/bin/bash
+# honey-storage-migrate — pvmove root from SATA SSD to NVMe (no boot config changes)
+#
+# APPROACH: pvmove live-migrates LV extents between PVs within the same VG.
+# The VG name, LV name, and UUID all stay identical. GRUB, BLS entries, fstab,
+# initramfs — nothing changes. This is the correct approach for root migration.
+#
+# WHY NOT THIN LVM:
+#   GRUB cannot read thin LVM. This is a fundamental limitation of GRUB's
+#   diskfilter.c, which only supports thick/linear/mirror/raid LV types.
+#   Red Hat BZ#1164947, filed 2014, will not be fixed:
+#     https://bugzilla.redhat.com/show_bug.cgi?id=1164947
+#   Thin provisioning uses a separate metadata LV + data LV that GRUB cannot
+#   parse. Attempts to boot from thin LVM fail with:
+#     "error: diskfilter writes are not supported"
+#   Thin pools are for DATA volumes only — never root.
+#
+# PHASES:
+#   phase0  — Pre-flight checks (non-destructive)
+#   phase1  — Clean up failed thin pool, partition NVMe, pvmove root
+#   phase2  — Set up data thin pool on second NVMe (post-reboot)
+#   phase3  — Set up HDD archive tier
+#   phase4  — Install boom-boot for kernel snapshot testing
+#
+# Usage: sudo ./honey-storage-migrate <phase> [--dry-run]
+set -euo pipefail
+
+RED='\033[0;31m'
+GRN='\033[0;32m'
+YEL='\033[0;33m'
+BLU='\033[0;34m'
+NC='\033[0m'
+
+ok()   { echo -e "  ${GRN}[OK]${NC} $1"; }
+warn() { echo -e "  ${YEL}[WARN]${NC} $1"; }
+fail() { echo -e "  ${RED}[FAIL]${NC} $1"; }
+info() { echo -e "  ${BLU}[INFO]${NC} $1"; }
+
+PHASE="${1:-}"
+DRY_RUN=0
+if [ "${2:-}" = "--dry-run" ]; then
+    DRY_RUN=1
+fi
+
+if [ -z "$PHASE" ]; then
+    echo "Usage: sudo $0 <phase0|phase1|phase2|phase3|phase4> [--dry-run]"
+    echo ""
+    echo "Phases:"
+    echo "  phase0  Pre-flight checks (safe, no changes)"
+    echo "  phase1  Clean failed thin pool + pvmove root to NVMe (live)"
+    echo "  phase2  Set up data thin pool on second NVMe (after reboot)"
+    echo "  phase3  Set up HDD archive tier"
+    echo "  phase4  Install boom-boot for kernel snapshots"
+    echo ""
+    echo "Run phase0 first, then phase1, reboot, then phase2-4."
+    exit 1
+fi
+
+run_cmd() {
+    if [ "$DRY_RUN" -eq 1 ]; then
+        echo -e "  ${BLU}[DRY-RUN]${NC} $*"
+    else
+        "$@"
+    fi
+}
+
+# ── Phase 0: Pre-flight ──
+phase0() {
+    echo "=========================================="
+    echo " Phase 0: Pre-flight checks"
+    echo "=========================================="
+
+    echo ""
+    echo "── Current VG/PV layout ──"
+    pvs 2>/dev/null || warn "pvs failed (expected if no PVs)"
+    echo ""
+    vgs 2>/dev/null || warn "vgs failed"
+    echo ""
+    lvs 2>/dev/null || warn "lvs failed"
+
+    echo ""
+    echo "── Block devices ──"
+    lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT 2>/dev/null || true
+
+    echo ""
+    echo "── Root filesystem ──"
+    ROOTDEV=$(findmnt -no SOURCE /)
+    ROOTFS=$(findmnt -no FSTYPE /)
+    ROOTSIZE=$(findmnt -no SIZE /)
+    info "Root device: $ROOTDEV"
+    info "Root fstype: $ROOTFS"
+    info "Root size: $ROOTSIZE"
+
+    echo ""
+    echo "── Root VG check ──"
+    # Verify root is on thick LVM (rl00)
+    if echo "$ROOTDEV" | grep -q "rl00"; then
+        ok "Root is on VG rl00"
+    else
+        warn "Root is not on rl00 (found: $ROOTDEV)"
+    fi
+
+    # Check LV type
+    ROOT_LV_ATTRS=$(lvs --noheadings -o lv_attr rl00/root 2>/dev/null | tr -d ' ' || echo "unknown")
+    if echo "$ROOT_LV_ATTRS" | grep -q "^-wi"; then
+        ok "rl00/root is thick LVM (attrs: $ROOT_LV_ATTRS)"
+    elif echo "$ROOT_LV_ATTRS" | grep -q "^V"; then
+        fail "rl00/root is thin LVM! GRUB cannot read this (BZ#1164947)"
+        exit 1
+    else
+        info "rl00/root LV attrs: $ROOT_LV_ATTRS"
+    fi
+
+    echo ""
+    echo "── NVMe status ──"
+    for dev in /dev/nvme0n1 /dev/nvme1n1; do
+        if [ -b "$dev" ]; then
+            ok "$dev present ($(lsblk -dno SIZE "$dev"))"
+        else
+            fail "$dev not found"
+        fi
+    done
+
+    echo ""
+    echo "── Failed thin pool check ──"
+    if vgs nvme &>/dev/null; then
+        warn "VG 'nvme' exists (failed thin pool migration)"
+        info "  phase1 will clean this up: vgremove -f nvme"
+        lvs nvme 2>/dev/null | head -5 || true
+    else
+        ok "No 'nvme' VG found (already cleaned or never created)"
+    fi
+
+    echo ""
+    echo "── Disk usage ──"
+    df -h / /boot /boot/efi 2>/dev/null || true
+
+    echo ""
+    echo "=========================================="
+    echo " Pre-flight complete. If checks pass, run:"
+    echo "   sudo $0 phase1"
+    echo "=========================================="
+}
+
+# ── Phase 1: pvmove root from SATA to NVMe ──
+phase1() {
+    echo "=========================================="
+    echo " Phase 1: pvmove root from SATA to NVMe"
+    echo "=========================================="
+
+    if [ "$(id -u)" -ne 0 ]; then
+        fail "Phase 1 requires root"
+        exit 1
+    fi
+
+    echo ""
+    echo "── Step 1.1: Clean up failed thin pool on NVMe ──"
+    if vgs nvme &>/dev/null; then
+        info "Removing failed thin pool VG 'nvme'..."
+        run_cmd vgremove -f nvme
+        ok "VG 'nvme' removed"
+    else
+        ok "No 'nvme' VG to clean (already gone)"
+    fi
+
+    # Remove PV signatures from NVMe if present
+    for dev in /dev/nvme0n1 /dev/nvme1n1; do
+        if pvs "$dev" &>/dev/null; then
+            info "Removing PV from $dev..."
+            run_cmd pvremove "$dev"
+        fi
+        # Also check partitions
+        for part in "${dev}p1" "${dev}p2"; do
+            if pvs "$part" &>/dev/null; then
+                info "Removing PV from $part..."
+                run_cmd pvremove "$part"
+            fi
+        done
+    done
+    ok "NVMe PV signatures cleaned"
+
+    echo ""
+    echo "── Step 1.2: Partition nvme0n1 for thick LVM ──"
+    info "Creating GPT partition table on /dev/nvme0n1..."
+    run_cmd parted -s /dev/nvme0n1 mklabel gpt
+    run_cmd parted -s /dev/nvme0n1 mkpart primary 1MiB 100%
+    run_cmd pvcreate /dev/nvme0n1p1
+    ok "nvme0n1p1 ready as PV"
+
+    echo ""
+    echo "── Step 1.3: Extend rl00 VG to NVMe ──"
+    run_cmd vgextend rl00 /dev/nvme0n1p1
+    ok "rl00 VG extended to include nvme0n1p1"
+
+    echo ""
+    echo "── Step 1.4: pvmove (live migration, no reboot needed) ──"
+    # Find the current SATA PV in rl00
+    SATA_PV=$(pvs --noheadings -o pv_name -S vg_name=rl00 2>/dev/null | grep -v nvme | tr -d ' ' | head -1)
+    if [ -z "$SATA_PV" ]; then
+        fail "Cannot find SATA PV in rl00 VG"
+        exit 1
+    fi
+    info "Migrating extents from $SATA_PV to /dev/nvme0n1p1..."
+    info "This will take 10-30 minutes. Do NOT interrupt."
+    run_cmd pvmove "$SATA_PV" /dev/nvme0n1p1
+    ok "pvmove complete — all extents now on NVMe"
+
+    echo ""
+    echo "── Step 1.5: Remove SATA from VG ──"
+    run_cmd vgreduce rl00 "$SATA_PV"
+    ok "$SATA_PV removed from rl00 VG"
+
+    echo ""
+    echo "── Step 1.6: Extend root LV into freed space ──"
+    run_cmd lvextend -l +100%FREE rl00/root
+    run_cmd xfs_growfs /
+    ok "Root filesystem extended"
+
+    echo ""
+    echo "── Step 1.7: Rebuild initramfs (NVMe modules) ──"
+    info "Ensuring NVMe modules are in initramfs..."
+    run_cmd dracut --force
+    ok "initramfs rebuilt"
+
+    echo ""
+    echo "── Verify ──"
+    pvs
+    echo ""
+    df -h /
+    echo ""
+    info "Root is now on NVMe. VG name, LV name, UUID all unchanged."
+    info "GRUB config unchanged. BLS entries unchanged. fstab unchanged."
+
+    echo ""
+    echo "=========================================="
+    echo " Phase 1 complete."
+    echo " REBOOT NOW to verify NVMe root works."
+    echo " After reboot, run: sudo $0 phase2"
+    echo "=========================================="
+}
+
+# ── Phase 2: Data thin pool on second NVMe ──
+phase2() {
+    echo "=========================================="
+    echo " Phase 2: Data thin pool on second NVMe"
+    echo " (Thin LVM is safe here — this is data, not root)"
+    echo "=========================================="
+
+    if [ "$(id -u)" -ne 0 ]; then
+        fail "Phase 2 requires root"
+        exit 1
+    fi
+
+    # Verify we booted from NVMe
+    ROOTPV=$(pvs --noheadings -o pv_name -S vg_name=rl00 2>/dev/null | tr -d ' ' | head -1)
+    if echo "$ROOTPV" | grep -q "nvme"; then
+        ok "Root is on NVMe ($ROOTPV) — phase 1 succeeded"
+    else
+        fail "Root is still on SATA ($ROOTPV) — phase 1 did not complete"
+        fail "Re-run phase1 or investigate"
+        exit 1
+    fi
+
+    echo ""
+    echo "── Step 2.1: Partition nvme1n1 ──"
+    run_cmd parted -s /dev/nvme1n1 mklabel gpt
+    run_cmd parted -s /dev/nvme1n1 mkpart primary 1MiB 100%
+    run_cmd pvcreate /dev/nvme1n1p1
+    run_cmd vgcreate data /dev/nvme1n1p1
+    ok "data VG created on nvme1n1p1"
+
+    echo ""
+    echo "── Step 2.2: Create thin pool ──"
+    run_cmd lvcreate -l 95%FREE -T data/thinpool --chunksize 512k
+    ok "Thin pool data/thinpool created"
+
+    echo ""
+    echo "── Step 2.3: Create thin LVs ──"
+    run_cmd lvcreate -V 500G -T data/thinpool -n home
+    run_cmd lvcreate -V 500G -T data/thinpool -n containers
+    run_cmd lvcreate -V 200G -T data/thinpool -n bci
+    ok "Thin LVs created: home, containers, bci"
+
+    echo ""
+    echo "── Step 2.4: Format filesystems ──"
+    run_cmd mkfs.xfs /dev/data/home
+    run_cmd mkfs.xfs /dev/data/containers
+    run_cmd mkfs.xfs /dev/data/bci
+    ok "XFS filesystems created"
+
+    echo ""
+    echo "── Step 2.5: Create mount points ──"
+    run_cmd mkdir -p /home /var/lib/rancher /data
+    ok "Mount points created"
+
+    echo ""
+    info "Add the following to /etc/fstab:"
+    echo "    /dev/mapper/data-home       /home            xfs defaults 0 0"
+    echo "    /dev/mapper/data-containers /var/lib/rancher xfs defaults 0 0"
+    echo "    /dev/mapper/data-bci        /data            xfs defaults 0 0"
+    echo ""
+    warn "Review fstab entries before adding — these are data mounts, NOT root."
+    warn "Thin LVM is safe for data volumes (BZ#1164947 only affects GRUB/root)."
+
+    echo ""
+    echo "=========================================="
+    echo " Phase 2 complete. Add fstab entries, then:"
+    echo "   sudo mount -a"
+    echo "   sudo $0 phase3"
+    echo "=========================================="
+}
+
+# ── Phase 3: HDD archive tier ──
+phase3() {
+    echo "=========================================="
+    echo " Phase 3: HDD archive tier"
+    echo "=========================================="
+
+    if [ "$(id -u)" -ne 0 ]; then
+        fail "Phase 3 requires root"
+        exit 1
+    fi
+
+    echo ""
+    echo "── Step 3.1: Check for old rl VG on HDD ──"
+    if vgs rl &>/dev/null; then
+        info "Removing old 'rl' VG from HDD..."
+        run_cmd vgremove -f rl
+    fi
+
+    echo ""
+    echo "── Step 3.2: Create hdd VG ──"
+    # Find the HDD PV (sdb3 typically)
+    HDD_PV="/dev/sdb3"
+    if [ ! -b "$HDD_PV" ]; then
+        fail "$HDD_PV not found — check HDD partition layout"
+        lsblk /dev/sdb 2>/dev/null || true
+        exit 1
+    fi
+    run_cmd pvcreate "$HDD_PV"
+    run_cmd vgcreate hdd "$HDD_PV"
+    run_cmd lvcreate -l 100%FREE -n archive hdd
+    run_cmd mkfs.xfs /dev/hdd/archive
+    run_cmd mkdir -p /archive
+    ok "hdd/archive created"
+
+    echo ""
+    info "Add to /etc/fstab:"
+    echo "    /dev/mapper/hdd-archive /archive xfs defaults 0 0"
+
+    echo ""
+    echo "=========================================="
+    echo " Phase 3 complete. Run: sudo $0 phase4"
+    echo "=========================================="
+}
+
+# ── Phase 4: boom-boot for kernel snapshots ──
+phase4() {
+    echo "=========================================="
+    echo " Phase 4: boom-boot kernel snapshot support"
+    echo "=========================================="
+
+    if [ "$(id -u)" -ne 0 ]; then
+        fail "Phase 4 requires root"
+        exit 1
+    fi
+
+    echo ""
+    echo "── Step 4.1: Install boom-boot ──"
+    if command -v boom &>/dev/null; then
+        ok "boom already installed ($(boom --version 2>&1 | head -1))"
+    else
+        run_cmd dnf install -y boom-boot
+        ok "boom-boot installed"
+    fi
+
+    echo ""
+    echo "── Usage for kernel testing ──"
+    info "Before installing a new kernel:"
+    echo "    sudo lvcreate -s -n root_pre_xr -L 50G rl00/root"
+    echo "    sudo boom create --title 'Rocky pre-XR snap' --rootlv rl00/root_pre_xr"
+    echo ""
+    info "If kernel fails: select snapshot from GRUB menu"
+    info "If kernel works: sudo lvremove rl00/root_pre_xr"
+
+    echo ""
+    echo "=========================================="
+    echo " Phase 4 complete. All phases done."
+    echo ""
+    echo " Final layout:"
+    echo "   nvme0n1p1: rl00 VG (thick) — / (root)"
+    echo "   nvme1n1p1: data VG (thin)  — /home, /var/lib/rancher, /data"
+    echo "   sdb3:      hdd VG (thick)  — /archive"
+    echo "   sda1:      /boot/efi"
+    echo "   sda2:      /boot"
+    echo "=========================================="
+}
+
+# Dispatch
+case "$PHASE" in
+    phase0) phase0 ;;
+    phase1) phase1 ;;
+    phase2) phase2 ;;
+    phase3) phase3 ;;
+    phase4) phase4 ;;
+    *)
+        echo "Unknown phase: $PHASE"
+        echo "Usage: sudo $0 <phase0|phase1|phase2|phase3|phase4> [--dry-run]"
+        exit 1
+        ;;
+esac

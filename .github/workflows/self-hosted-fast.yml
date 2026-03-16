@@ -70,6 +70,10 @@ jobs:
               $(find lisp/vr lisp/ext -name "*.el" | sort)
           '
 
+      - name: Validate Dhall boot configs
+        run: |
+          nix shell nixpkgs#dhall nixpkgs#just --command just boot-validate
+
   fast-build:
     name: Fast Build (self-hosted)
     if: vars.USE_SELFHOSTED == 'true'

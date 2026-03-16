@@ -36,6 +36,12 @@ let CPU =
       , microcodeFixBios : Text
       }
 
+let NUMANode =
+      { cpus : Text, ramMiB : Natural, distanceSelf : Natural, distanceCross : Natural }
+
+let SMIBaseline =
+      { worstCaseUs : Natural, periodicRateHz : Double, totalFromBoot : Natural, biosVersion : Text }
+
 let Platform =
       { name : Text
       , vendor : Text
@@ -53,6 +59,8 @@ let Platform =
           , smmHandlers : Natural
           , peiModules : Natural
           }
+      , numa : List NUMANode
+      , smiBaseline : SMIBaseline
       }
 
 let wellsburg
@@ -113,9 +121,6 @@ let haswellEP
       , microcodeFixBios = "A34"
       }
 
-let NUMANode =
-      { cpus : Text, ramMiB : Natural, distanceSelf : Natural, distanceCross : Natural }
-
 let dellT7810
     : Platform
     = { name = "honey"
@@ -143,4 +148,4 @@ let dellT7810
           }
       }
 
-in  { Platform, PCH, CPU, SMISource, dellT7810, wellsburg, haswellEP }
+in  { Platform, PCH, CPU, SMISource, NUMANode, SMIBaseline, dellT7810, wellsburg, haswellEP }

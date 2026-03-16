@@ -7,20 +7,22 @@
 --   - SMI config: disable kernel features that trigger SMIs
 --   - BCI config: high-resolution timers, CPU isolation support
 
+let Action = < enable | disable | set-val | set-str >
+
 let ConfigEntry =
-      { Type = { key : Text, value : Text, action : Text }
-      , default.action = "enable"
+      { Type = { key : Text, value : Text, action : Action }
+      , default = { value = "", action = Action.enable }
       }
 
-let enable = \(key : Text) -> { key, value = "", action = "enable" }
+let enable = \(key : Text) -> { key, value = "", action = Action.enable }
 
-let disable = \(key : Text) -> { key, value = "", action = "disable" }
+let disable = \(key : Text) -> { key, value = "", action = Action.disable }
 
 let setVal =
-      \(key : Text) -> \(value : Text) -> { key, value, action = "set-val" }
+      \(key : Text) -> \(value : Text) -> { key, value, action = Action.set-val }
 
 let setStr =
-      \(key : Text) -> \(value : Text) -> { key, value, action = "set-str" }
+      \(key : Text) -> \(value : Text) -> { key, value, action = Action.set-str }
 
 let xrConfig =
       [ enable "CONFIG_DRM_AMD_DC_DSC"
@@ -80,21 +82,17 @@ let bciConfig =
       ]
 
 let renderEntry =
-      \(entry : { key : Text, value : Text, action : Text }) ->
-        let cmd =
-              merge
-                { enable = "scripts/config --enable ${entry.key}"
-                , disable = "scripts/config --disable ${entry.key}"
-                , set-val =
-                    "scripts/config --set-val ${entry.key} ${entry.value}"
-                , set-str =
-                    "scripts/config --set-str ${entry.key} ${entry.value}"
-                }
-                entry.action
+      \(entry : { key : Text, value : Text, action : Action }) ->
+        merge
+          { enable = "scripts/config --enable ${entry.key}"
+          , disable = "scripts/config --disable ${entry.key}"
+          , set-val = "scripts/config --set-val ${entry.key} ${entry.value}"
+          , set-str = "scripts/config --set-str ${entry.key} ${entry.value}"
+          }
+          entry.action
 
-        in  cmd
-
-in  { ConfigEntry
+in  { Action
+    , ConfigEntry
     , enable
     , disable
     , setVal
