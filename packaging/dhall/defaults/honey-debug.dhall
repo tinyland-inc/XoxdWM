@@ -30,7 +30,8 @@ let config
         , version = stock.bootEntry.version
         , linux = stock.bootEntry.linux
         , initrd = stock.bootEntry.initrd
-        , options = debugOptions
+        , rootDevice = stock.bootEntry.rootDevice
+        , extraOptions = debugOptions
         , machineId = stock.bootEntry.machineId
         , grubClass = Some "kernel"
         }

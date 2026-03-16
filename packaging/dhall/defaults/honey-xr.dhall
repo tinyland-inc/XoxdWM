@@ -39,11 +39,12 @@ let config
     = { generation = 1
       , description = "XR kernel with RT params + SMI mitigation"
       , bootEntry =
-        { title = "XR Kernel (6.19.5-4.xr.el10) BTF"
-        , version = "6.19.5-4.xr.el10"
-        , linux = "/vmlinuz-6.19.5-4.xr.el10"
-        , initrd = [ "/initramfs-6.19.5-4.xr.el10.img" ]
-        , options = xrOptions
+        { title = "XR Kernel (6.19.5-5.xr.el10)"
+        , version = "6.19.5-5.xr.el10"
+        , linux = "/vmlinuz-6.19.5-5.xr.el10"
+        , initrd = [ "/initramfs-6.19.5-5.xr.el10.img" ]
+        , rootDevice = "/dev/mapper/rl00-root"
+        , extraOptions = xrOptions
         , machineId = stock.bootEntry.machineId
         , grubClass = Some "kernel"
         }

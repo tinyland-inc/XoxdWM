@@ -29,7 +29,8 @@ let config
         , version = "6.19.5-1.el10.elrepo.x86_64"
         , linux = "/vmlinuz-6.19.5-1.el10.elrepo.x86_64"
         , initrd = [ "/initramfs-6.19.5-1.el10.elrepo.x86_64.img" ]
-        , options =
+        , rootDevice = "/dev/mapper/rl00-root"
+        , extraOptions =
                 "ro crashkernel=2G-64G:256M,64G-:512M"
             ++  " resume=UUID=${swapUUID}"
             ++  " rd.lvm.lv=rl00/root rd.lvm.lv=rl00/swap"
