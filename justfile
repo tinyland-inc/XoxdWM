@@ -262,7 +262,7 @@ deploy host="honey" components="all":
 
     if [[ "{{components}}" == "all" || "{{components}}" == *"kernel"* ]]; then
         echo ">>> Checking kernel..."
-        LATEST=$(gh release view -R Jesssullivan/linux-xr --json tagName -q .tagName 2>/dev/null || echo "none")
+        LATEST=$(gh release view -R tinyland-inc/linux-xr --json tagName -q .tagName 2>/dev/null || echo "none")
         echo "    Latest kernel release: ${LATEST}"
     fi
 
@@ -301,7 +301,7 @@ deploy-verify host="honey":
 
 # ── kernel (linux-xr) ─────────────────────────────────
 
-linux_xr_repo := "Jesssullivan/linux-xr"
+linux_xr_repo := "tinyland-inc/linux-xr"
 
 # Download + install latest XR kernel RPM on remote host.
 # Usage: just beyond-kernel-install honey v6.19.5-xr3          (generic)

@@ -24,7 +24,7 @@ Version:        %{kversion}
 Release:        %{krelease}
 Summary:        XR-optimized kernel with DSC fixes for Bigscreen Beyond 2e
 License:        GPL-2.0-only
-URL:            https://github.com/Jesssullivan/linux-xr
+URL:            https://github.com/tinyland-inc/linux-xr
 
 Source0:        linux-%{kversion}.tar.xz
 Source1:        base.config
