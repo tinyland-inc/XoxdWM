@@ -12,9 +12,11 @@ let BootGeneration = (../types/BootGeneration.dhall).BootGeneration
 
 let stock = ./honey-stock.dhall
 
+let swapUUID = "6e9a97e2-44b0-4a14-922b-26ced14feed6"
+
 let debugOptions =
-        "root=/dev/mapper/rl00-root ro"
-    ++  " rd.lvm.lv=rl00/root rd.lvm.lv=rl00/swap"
+        "ro rd.lvm.lv=rl00/root rd.lvm.lv=rl00/swap"
+    ++  " resume=UUID=${swapUUID}"
     ++  " earlyprintk=vga,keep ignore_loglevel initcall_debug"
     ++  " nosmp nosoftlockup systemd.log_level=debug"
     ++  " rd.break"
@@ -24,12 +26,12 @@ let config
     = { generation = 99
       , description = "Debug boot — early console, single CPU, rd.break"
       , bootEntry =
-        { title = "Rocky Linux (debug) 10.1 (Coughlan)"
+        { title = "Rocky Linux (debug) 10.1 (Red Quartz)"
         , version = stock.bootEntry.version
         , linux = stock.bootEntry.linux
         , initrd = stock.bootEntry.initrd
         , options = debugOptions
-        , machineId = "honey"
+        , machineId = stock.bootEntry.machineId
         , grubClass = Some "kernel"
         }
       , grubDefaults = stock.grubDefaults

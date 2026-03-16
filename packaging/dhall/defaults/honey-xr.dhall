@@ -2,6 +2,8 @@
 --
 -- Adds RT boot parameters, SMI mitigation, and CPU isolation to the
 -- stock config. Used when installing kernel-xr on honey.
+--
+-- Validated against live BLS entry: 6.19.5-4.xr.el10 on honey (2026-03-16)
 
 let BootEntry = (../types/BootEntry.dhall).BootEntry
 let GrubDefaults = (../types/GrubDefaults.dhall).GrubDefaults
@@ -11,13 +13,16 @@ let BootGeneration = (../types/BootGeneration.dhall).BootGeneration
 
 let stock = ./honey-stock.dhall
 
--- Boot parameters composed from BootParams.dhall logic, but rendered
--- as a single string for the BLS entry.
+-- Swap UUID (same as stock — from blkid)
+let swapUUID = "6e9a97e2-44b0-4a14-922b-26ced14feed6"
+
+-- Boot parameters: stock base + SMI mitigation + CPU isolation
+-- Note: the existing XR BLS entry has a minimal set; this adds full
+-- isolation params that the tuned profile also sets via [bootloader].
 let xrOptions =
-        "root=/dev/mapper/rl00-root ro"
+        "ro crashkernel=2G-64G:256M,64G-:512M"
+    ++  " resume=UUID=${swapUUID}"
     ++  " rd.lvm.lv=rl00/root rd.lvm.lv=rl00/swap"
-    ++  " crashkernel=1G-4G:192M,4G-64G:256M,64G-:512M"
-    ++  " resume=/dev/mapper/rl00-swap"
     -- SMI mitigation (from firmware RE of T7810 BIOS A34)
     ++  " tsc=nowatchdog clocksource=tsc nosoftlockup"
     ++  " intel_pstate=disable processor.max_cstate=1 intel_idle.max_cstate=0"
@@ -34,12 +39,12 @@ let config
     = { generation = 1
       , description = "XR kernel with RT params + SMI mitigation"
       , bootEntry =
-        { title = "Rocky Linux (XR kernel) 10.1 (Coughlan)"
-        , version = "6.19.5-1.xr.el10.x86_64"
-        , linux = "/vmlinuz-6.19.5-1.xr.el10.x86_64"
-        , initrd = [ "/initramfs-6.19.5-1.xr.el10.x86_64.img" ]
+        { title = "XR Kernel (6.19.5-4.xr.el10) BTF"
+        , version = "6.19.5-4.xr.el10"
+        , linux = "/vmlinuz-6.19.5-4.xr.el10"
+        , initrd = [ "/initramfs-6.19.5-4.xr.el10.img" ]
         , options = xrOptions
-        , machineId = "honey"
+        , machineId = stock.bootEntry.machineId
         , grubClass = Some "kernel"
         }
       , grubDefaults = stock.grubDefaults
