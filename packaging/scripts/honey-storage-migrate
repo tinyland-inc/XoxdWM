@@ -330,17 +330,35 @@ phase3() {
 
     echo ""
     echo "── Step 3.2: Create hdd VG ──"
-    # Find the HDD PV (sdb3 typically)
-    HDD_PV="/dev/sdb3"
-    if [ ! -b "$HDD_PV" ]; then
-        fail "$HDD_PV not found — check HDD partition layout"
-        lsblk /dev/sdb 2>/dev/null || true
+    # Find the HDD by looking for the largest non-NVMe rotational disk.
+    # Device names (sda/sdb) can change across reboots after NVMe partitioning.
+    HDD_PV=""
+    for disk in /dev/sd?; do
+        [ -b "$disk" ] || continue
+        ROTATIONAL=$(cat "/sys/block/$(basename "$disk")/queue/rotational" 2>/dev/null || echo "0")
+        if [ "$ROTATIONAL" = "1" ]; then
+            # Found a rotational disk — look for its largest partition
+            for part in "${disk}"[0-9]*; do
+                [ -b "$part" ] || continue
+                # Pick the largest partition (likely the LVM partition)
+                PSIZE=$(blockdev --getsize64 "$part" 2>/dev/null || echo "0")
+                if [ "$PSIZE" -gt "${BEST_SIZE:-0}" ]; then
+                    BEST_SIZE="$PSIZE"
+                    HDD_PV="$part"
+                fi
+            done
+        fi
+    done
+    if [ -z "$HDD_PV" ]; then
+        fail "No rotational disk partition found — check lsblk"
+        lsblk -o NAME,SIZE,TYPE,ROTA 2>/dev/null || true
         exit 1
     fi
-    run_cmd pvcreate "$HDD_PV"
+    info "Detected HDD partition: $HDD_PV ($(lsblk -dno SIZE "$HDD_PV" 2>/dev/null))"
+    run_cmd pvcreate -y "$HDD_PV"
     run_cmd vgcreate hdd "$HDD_PV"
-    run_cmd lvcreate -l 100%FREE -n archive hdd
-    run_cmd mkfs.xfs /dev/hdd/archive
+    run_cmd lvcreate -y -l 100%FREE -n archive hdd
+    run_cmd mkfs.xfs -f /dev/hdd/archive
     run_cmd mkdir -p /archive
     ok "hdd/archive created"
 
