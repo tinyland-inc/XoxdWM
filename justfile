@@ -1147,6 +1147,59 @@ boot-verify host="honey":
     echo "=== Boot verification on {{host}} ==="
     ssh jess@{{host}} "echo '── Kernel ──' && uname -r; echo '── Default ──' && sudo grubby --default-kernel; echo '── BLS Entries ──' && ls -la /boot/loader/entries/; echo '── Current cmdline ──' && cat /proc/cmdline; echo '── GRUB defaults ──' && cat /etc/default/grub"
 
+# Test a kernel with grub2-reboot (one-shot: auto-reverts to saved default on next reboot).
+# Usage: just boot-test-kernel honey /boot/vmlinuz-6.19.5-5.xr.el10
+[group('boot')]
+boot-test-kernel host="honey" kernel="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -z "{{kernel}}" ]]; then
+        echo "Usage: just boot-test-kernel <host> <kernel-path>"
+        echo "  e.g.: just boot-test-kernel honey /boot/vmlinuz-6.19.5-5.xr.el10"
+        echo ""
+        echo "This uses grub2-reboot for a ONE-SHOT boot. If the kernel fails,"
+        echo "the next power cycle auto-boots the saved default (ELRepo)."
+        echo ""
+        ssh jess@{{host}} "echo 'tinyland' | sudo -S grubby --info=ALL 2>/dev/null | grep -E '^(index|kernel|title)='"
+        exit 1
+    fi
+    echo "=== One-shot kernel test on {{host}} ==="
+    ssh jess@{{host}} "echo 'tinyland' | sudo -S bash -c '
+        SAVED=\$(grubby --default-kernel)
+        echo \"  Saved default: \${SAVED}\"
+        echo \"  Testing: {{kernel}}\"
+        # Get the BLS entry index for the target kernel
+        IDX=\$(grubby --info={{kernel}} 2>/dev/null | grep ^index= | cut -d= -f2)
+        if [ -z \"\${IDX}\" ]; then
+            echo \"FAIL: {{kernel}} not found in grubby entries\"
+            exit 1
+        fi
+        echo \"  Entry index: \${IDX}\"
+        # grub2-reboot sets the entry for ONE boot only, then reverts to saved_entry
+        grub2-reboot \${IDX}
+        echo \"\"
+        echo \"  grub2-reboot set. Next boot will use {{kernel}}.\"
+        echo \"  If it fails, the FOLLOWING boot auto-reverts to \${SAVED}.\"
+        echo \"  Rebooting now...\"
+        reboot
+    '" 2>/dev/null
+    echo "Reboot sent. Monitoring..."
+    for i in $(seq 1 24); do
+        sleep 10
+        KVER=$(ssh -o ConnectTimeout=5 jess@{{host}} "uname -r" 2>/dev/null) && {
+            echo "{{host}} booted: ${KVER} (after $((i*10))s)"
+            if echo "${KVER}" | grep -q "xr"; then
+                echo "SUCCESS: XR kernel is running!"
+            else
+                echo "FALLBACK: Booted ${KVER} (not XR — kernel may have failed)"
+            fi
+            exit 0
+        }
+        echo "Waiting... ($((i*10))s)"
+    done
+    echo "TIMEOUT: {{host}} did not come back in 4 minutes."
+    echo "Check console — if stuck, power cycle to auto-revert to saved default."
+
 # ── gpu ──────────────────────────────────────────────
 
 # Show GPU status (temps, fan, power) on remote host.
