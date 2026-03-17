@@ -134,25 +134,22 @@
             # Emacs
             emacsPkg
 
-            # Wayland / compositor deps
-          ] ++ waylandLibs ++ [
-            # OpenXR / VR
-            monado
-            openxr-loader
-            libuvc
-
-            # Dev tools
+            # Dev tools (cross-platform)
             just
             git-cliff
             nixpkgs-fmt
             direnv
             cachix
             dhall
-
-            # Testing
+          ]
+          # Wayland / VR deps (Linux only — not available on macOS)
+          ++ lib.optionals stdenv.isLinux (waylandLibs ++ [
+            monado
+            openxr-loader
+            libuvc
             cage   # single-window Wayland compositor for testing
             weston # headless Wayland compositor
-          ];
+          ]);
 
           # Common function to build the compositor with given features
           mkCompositor = { pname, features ? [ ], extraBuildInputs ? [ ] }:

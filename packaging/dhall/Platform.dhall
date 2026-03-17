@@ -140,6 +140,7 @@ let dellT7810
           [ { cpus = "0-7,16-23", ramMiB = 131709, distanceSelf = 10, distanceCross = 21 }
           , { cpus = "8-15,24-31", ramMiB = 98514, distanceSelf = 10, distanceCross = 21 }
           ]
+      -- SMI baseline measured on BIOS A02; honey now runs A34 (TSC errata fixed)
       , smiBaseline =
           { worstCaseUs = 2523
           , periodicRateHz = 1.0

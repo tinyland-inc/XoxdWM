@@ -63,7 +63,7 @@ let
     HWLAT_TRACER = yes;         # in-kernel hardware latency tracer
     TRACER_SNAPSHOT = yes;       # snapshot support for latency capture
     X86_MSR = yes;               # /dev/msr for SMI_COUNT (MSR 0x34)
-    DELL_RBU = module;           # Dell Remote BIOS Update driver
+    DELL_RBU = no;               # Kconfig `select FW_LOADER_USER_HELPER` breaks systemd 257; use F12 BIOS flash
     ITCO_WDT = no;               # disable TCO watchdog (eliminates TCO_EN SMIs)
 
     # BCI workload support (100:100 channel AD/DA, C777 wordclock)
