@@ -290,8 +290,10 @@ ACTUAL_KREL=${ACTUAL_KREL:-${KREL}}
 rm -f /var/lib/rpm-state/kernel/installing_core_${ACTUAL_KREL}
 
 # Register with weak-modules (RHEL/Rocky only)
+# weak-modules may warn about missing symvers (non-fatal) — don't abort %posttrans.
+# If weak-modules fails, kernel-install still creates the BLS entry correctly.
 if [ -x /usr/sbin/weak-modules ]; then
-    /usr/sbin/weak-modules --add-kernel ${ACTUAL_KREL} || exit $?
+    /usr/sbin/weak-modules --add-kernel ${ACTUAL_KREL} || true
 fi
 
 # kernel-install orchestrates: depmod, dracut (initramfs), BLS entry creation
