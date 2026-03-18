@@ -240,6 +240,27 @@ fn device_added(
     Ok(())
 }
 
+/// Check if a DRM connector has the non_desktop property set.
+/// Non-desktop connectors are VR headsets and should not be used for desktop output.
+#[cfg(feature = "vr")]
+fn is_non_desktop_connector(drm: &DrmDevice, conn: &connector::Info) -> bool {
+    let handle = conn.handle();
+    let props = match drm.get_properties(handle) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+
+    for (&prop_handle, &value) in props.handles().iter().zip(props.values().iter()) {
+        if let Ok(info) = drm.get_property(prop_handle) {
+            if info.name().to_str() == Ok("non_desktop") {
+                return value != 0;
+            }
+        }
+    }
+
+    false
+}
+
 /// Scan DRM connectors and set up outputs for each connected display.
 fn scan_connectors(
     gpu: &mut GpuDevice,
@@ -268,8 +289,68 @@ fn scan_connectors(
         used_crtcs.insert(*crtc_handle);
     }
 
+    // Collect VR connector info for the HMD manager.
+    #[cfg(feature = "vr")]
+    {
+        let mut vr_connectors = Vec::new();
+        for conn in &connectors {
+            let non_desktop = is_non_desktop_connector(&gpu.drm, conn);
+            let connected = conn.state() == connector::State::Connected;
+            let connector_type = match conn.interface() {
+                connector::Interface::DisplayPort => {
+                    crate::vr::drm_lease::ConnectorType::DisplayPort
+                }
+                connector::Interface::HDMIA | connector::Interface::HDMIB => {
+                    crate::vr::drm_lease::ConnectorType::Hdmi
+                }
+                connector::Interface::USB => crate::vr::drm_lease::ConnectorType::UsbC,
+                connector::Interface::Virtual => {
+                    crate::vr::drm_lease::ConnectorType::Virtual
+                }
+                _ => crate::vr::drm_lease::ConnectorType::Unknown,
+            };
+            let modes: Vec<crate::vr::drm_lease::DisplayMode> = conn
+                .modes()
+                .iter()
+                .map(|m| crate::vr::drm_lease::DisplayMode {
+                    width: m.size().0 as u32,
+                    height: m.size().1 as u32,
+                    refresh_hz: (m.vrefresh() as u32).max(1),
+                    preferred: m.mode_type().contains(ModeTypeFlags::PREFERRED),
+                })
+                .collect();
+
+            vr_connectors.push(crate::vr::drm_lease::DrmConnectorInfo {
+                connector_id: conn.handle().into(),
+                connector_name: format!(
+                    "{}-{}",
+                    connector_type.as_str(),
+                    conn.interface_id()
+                ),
+                connector_type,
+                non_desktop,
+                connected,
+                manufacturer: String::new(),
+                model: String::new(),
+                serial: String::new(),
+                modes,
+            });
+        }
+        state.vr_state.hmd_manager.update_connectors(vr_connectors);
+    }
+
     for connector in &connectors {
         if connector.state() != connector::State::Connected {
+            continue;
+        }
+
+        // Skip non-desktop (HMD) connectors — they're managed via DRM lease.
+        #[cfg(feature = "vr")]
+        if is_non_desktop_connector(&gpu.drm, connector) {
+            info!(
+                connector = ?connector.handle(),
+                "non-desktop connector, skipping (reserved for VR)"
+            );
             continue;
         }
 
