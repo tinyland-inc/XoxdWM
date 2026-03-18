@@ -194,6 +194,110 @@ impl TextureManager {
         }
     }
 
+    /// Upload pixel data to an existing GL texture (CPU readback path).
+    ///
+    /// This is the v0.6.0 fallback for surface content import: the compositor
+    /// reads surface pixels via Smithay's renderer and uploads them here.
+    /// Zero-copy DMA-BUF import is a future optimization.
+    #[cfg(feature = "vr")]
+    pub fn upload_surface_pixels(
+        &mut self,
+        gl: &glow::Context,
+        surface_id: u64,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+    ) {
+        let tex = match self.textures.get_mut(&surface_id) {
+            Some(t) => t,
+            None => {
+                // Auto-register if not tracked yet
+                self.register_surface(surface_id, width, height);
+                self.textures.get_mut(&surface_id).unwrap()
+            }
+        };
+
+        unsafe {
+            // Create texture if needed
+            if tex.gl_texture == 0 {
+                match gl.create_texture() {
+                    Ok(native_tex) => {
+                        tex.gl_texture = native_tex.0.get();
+                        debug!(
+                            "VR texture: created GL texture {} for surface {}",
+                            tex.gl_texture, surface_id
+                        );
+                    }
+                    Err(e) => {
+                        warn!("VR texture: create failed for surface {}: {}", surface_id, e);
+                        return;
+                    }
+                }
+            }
+
+            let native = match std::num::NonZeroU32::new(tex.gl_texture) {
+                Some(n) => glow::NativeTexture(n),
+                None => return,
+            };
+
+            gl.bind_texture(glow::TEXTURE_2D, Some(native));
+
+            // Upload pixel data
+            if tex.width != width || tex.height != height {
+                // Size changed — reallocate
+                gl.tex_image_2d(
+                    glow::TEXTURE_2D,
+                    0,
+                    tex.format.gl_internal_format() as i32,
+                    width as i32,
+                    height as i32,
+                    0,
+                    tex.format.gl_format(),
+                    glow::UNSIGNED_BYTE,
+                    glow::PixelUnpackData::Slice(Some(pixels)),
+                );
+                tex.width = width;
+                tex.height = height;
+            } else {
+                // Same size — sub-image update (faster)
+                gl.tex_sub_image_2d(
+                    glow::TEXTURE_2D,
+                    0,
+                    0,
+                    0,
+                    width as i32,
+                    height as i32,
+                    tex.format.gl_format(),
+                    glow::UNSIGNED_BYTE,
+                    glow::PixelUnpackData::Slice(pixels),
+                );
+            }
+
+            // Set filtering on first upload
+            if tex.dirty {
+                gl.tex_parameter_i32(
+                    glow::TEXTURE_2D,
+                    glow::TEXTURE_MIN_FILTER,
+                    glow::LINEAR as i32,
+                );
+                gl.tex_parameter_i32(
+                    glow::TEXTURE_2D,
+                    glow::TEXTURE_MAG_FILTER,
+                    glow::LINEAR as i32,
+                );
+            }
+
+            gl.bind_texture(glow::TEXTURE_2D, None);
+        }
+
+        tex.dirty = false;
+        debug!(
+            "VR texture: uploaded {}x{} pixels for surface {} ({}KB)",
+            width, height, surface_id,
+            pixels.len() / 1024,
+        );
+    }
+
     /// Import pending dirty textures (legacy path without GL).
     pub fn import_pending(&mut self) -> Vec<(u64, u32)> {
         let mut imported = Vec::new();
