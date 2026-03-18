@@ -30,6 +30,16 @@ impl CompositorHandler for EwwmState {
 
         // Check for app_id / title changes on xdg_toplevel surfaces.
         self.update_surface_metadata(surface);
+
+        // Mark VR texture dirty so the renderer re-imports the surface content.
+        #[cfg(feature = "vr")]
+        if self.vr_state.enabled {
+            if let Some(surface_id) = self.surface_id_for_wl_surface(surface) {
+                if let Some(renderer) = self.vr_state.renderer_mut() {
+                    renderer.texture_manager.mark_dirty(surface_id);
+                }
+            }
+        }
     }
 }
 
